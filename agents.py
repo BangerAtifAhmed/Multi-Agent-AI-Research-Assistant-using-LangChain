@@ -18,14 +18,14 @@ llm = ChatMistralAI(model_name="mistral-small-2506",api_key = os.getenv("MISTRAL
 def build_search_agent():
     
     return create_agent(
-        llm=llm,
+        model=llm,
         tools=[web_search],
     )
 
 # 2nd Agent for scraping content from a URL
 def build_scrape_agent():
     return create_agent(
-        llm=llm,
+        model=llm,
         tools=[scrape_url],
     )
 
