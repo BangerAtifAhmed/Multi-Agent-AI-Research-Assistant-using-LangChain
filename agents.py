@@ -1,5 +1,6 @@
 import os
 import warnings
+from rich import print
 from pprint import pprint
 from dotenv import load_dotenv
 from tools import web_search, scrape_url

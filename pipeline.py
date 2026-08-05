@@ -1,6 +1,9 @@
-from agents import build_search_agent, build_scrape_agent, writter_chain, critic_prompt , crictic_chain
-from pprint import pprint
 import re 
+from rich import print
+from pprint import pprint
+from agents import build_search_agent, build_scrape_agent, writter_chain, crictic_chain
+
+
 def research_pipelinne(topic:str)->dict:
     state = {}
     # Step 1: Writter agent to gather information on the topic using the search agent

@@ -1,11 +1,11 @@
-from langchain.tools import tool
-import requests
-from bs4 import BeautifulSoup
-from langchain_tavily import TavilySearch
 import os
-from dotenv import load_dotenv
-from pprint import pprint
+import requests
 from rich import print
+from pprint import pprint
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+from langchain.tools import tool
+from langchain_tavily import TavilySearch
 load_dotenv()
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
