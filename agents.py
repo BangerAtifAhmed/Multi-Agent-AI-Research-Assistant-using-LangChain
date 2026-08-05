@@ -3,7 +3,7 @@ import warnings
 from rich import print
 from pprint import pprint
 from dotenv import load_dotenv
-from tools import web_search, scrape_url
+from tools import web_search, scrape_url 
 from langchain.agents import create_agent
 from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -77,4 +77,67 @@ One line verdict:
 
 crictic_chain = critic_prompt | llm | StrOutputParser()
 
+pdf_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are an expert research assistant. Answer only from the provided PDF context."
+    ),
+    (
+        "human",
+        """
+Context:
+{context}
 
+Question:
+{question}
+
+Give a detailed answer based only on the PDF.
+"""
+    ),
+])
+
+pdf_chain = pdf_prompt | llm | StrOutputParser()
+
+
+
+
+hybrid_prompt = ChatPromptTemplate.from_template("""
+You are an expert AI Research Assistant.
+
+You have two sources of information:
+
+1. PDF Research
+- Information retrieved from the uploaded PDF.
+- Treat this as the primary source.
+
+2. Web Research
+- Recent information collected from trusted web sources.
+- Use it to complement, update, or compare with the PDF.
+
+Your task:
+- Answer the user's topic comprehensively.
+- Start with the information from the PDF.
+- Add relevant recent information from the web.
+- Clearly mention if the web research introduces newer developments not present in the PDF.
+- If the PDF and web research disagree, explain both viewpoints instead of choosing one without justification.
+- Do not invent facts that are not supported by either source.
+
+Topic:
+{topic}
+
+PDF Research:
+{pdf_research}
+
+Web Research:
+{web_research}
+
+Generate a well-structured research report with:
+1. Introduction
+2. Summary of the PDF
+3. Recent Web Findings
+4. Comparison (if applicable)
+5. Key Takeaways
+6. Conclusion
+""")
+
+hybrid_chain = hybrid_prompt | llm | StrOutputParser()
