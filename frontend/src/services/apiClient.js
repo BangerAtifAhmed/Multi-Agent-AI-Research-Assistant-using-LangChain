@@ -5,11 +5,34 @@
  * cookie. No token is ever read or stored by JavaScript.
  */
 
-export const API_BASE_URL = (
+/**
+ * Normalises the configured API URL so it always ends with the `/api` mount
+ * point the Express server uses.
+ *
+ * Both spellings are accepted, because either is a reasonable thing to put in
+ * an environment variable:
+ *
+ *   https://api.example.com       -> https://api.example.com/api
+ *   https://api.example.com/api   -> https://api.example.com/api
+ *   http://localhost:3000/api     -> http://localhost:3000/api
+ *   /api                          -> /api          (same-origin deployments)
+ *
+ * Getting this wrong is not a silent failure: every request lands on a path
+ * without the `/api` prefix and the server answers ROUTE_NOT_FOUND.
+ */
+export function normaliseApiBaseUrl(value) {
+  const raw = String(value ?? '').trim().replace(/\/+$/, '');
+  if (!raw) return '/api';
+  // Already mounted at /api (or a path ending in it): leave it alone.
+  if (/\/api$/i.test(raw)) return raw;
+  return `${raw}/api`;
+}
+
+export const API_BASE_URL = normaliseApiBaseUrl(
   import.meta.env.VITE_API_URL ||
-  import.meta.env.VITE_API_BASE_URL ||
-  'http://localhost:3000/api'
-).replace(/\/+$/, '');
+    import.meta.env.VITE_API_BASE_URL ||
+    'http://localhost:3000/api',
+);
 
 export class ApiRequestError extends Error {
   constructor(message, { status, code, retryAfter } = {}) {

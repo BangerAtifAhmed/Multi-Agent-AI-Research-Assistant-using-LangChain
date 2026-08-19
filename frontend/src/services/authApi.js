@@ -22,6 +22,10 @@ export const logoutEverywhere = () => request('/user/logout-all', { method: 'POS
 /**
  * Google sign-in is a full-page redirect, not a fetch: the backend owns the
  * whole OAuth exchange and the browser never sees the client secret.
+ *
+ * Built from API_BASE_URL, which is normalised to include the server's `/api`
+ * mount point, so this resolves to <api-origin>/api/auth/google in every
+ * environment. Nothing here is hard-coded.
  */
 export const googleLoginUrl = (redirectTo = '/') =>
   `${API_BASE_URL}/auth/google?redirectTo=${encodeURIComponent(redirectTo)}`;
