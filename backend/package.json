@@ -1,0 +1,28 @@
+{
+  "name": "rag-chat-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Express API for the RAG chat application: conversations, chat history, SSE streaming and the RAG pipeline.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "dev": "node --watch-path=./src src/server.js",
+    "start": "node src/server.js",
+    "migrate": "node src/scripts/migrate.js",
+    "migrate:status": "node src/scripts/migrate.js --status"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1113.0",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "ioredis": "^6.0.0",
+    "multer": "^2.0.2",
+    "pg": "^8.23.0"
+  }
+}

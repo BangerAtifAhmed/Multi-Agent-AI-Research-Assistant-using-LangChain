@@ -1,0 +1,30 @@
+# Never copy secrets into the image. Configuration is injected at runtime.
+.env
+.env.*
+!.env.example
+
+# Host-built dependencies would overwrite the ones installed inside the image
+# (and are compiled for the wrong platform).
+node_modules
+**/node_modules
+
+# Runtime data: uploaded documents and local databases belong on a volume or in
+# object storage, never in an image layer.
+data
+uploads
+chroma_persist
+
+# Python build artefacts and test fixtures
+**/__pycache__
+**/*.pyc
+rag_service/tests/fixtures
+
+# Local tooling
+.git
+.gitignore
+.vscode
+.idea
+*.log
+Dockerfile
+.dockerignore
+docker-compose*.yml

@@ -1,21 +1,14 @@
-import re 
+import re
 from rich import print
 from pprint import pprint
 from agents import build_search_agent, build_scrape_agent, writter_chain, crictic_chain , pdf_chain , hybrid_chain
-import os
-import hashlib
-from dotenv import load_dotenv
-from langchain_chroma import Chroma
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import (
-    HuggingFaceEmbeddings,
-    HuggingFaceEndpointEmbeddings,
-)
 
-load_dotenv()
+import settings
+from vector_store import get_pdf_hash, get_embeddings, get_vector_store, index_pdf
 
-USE_LOCAL = True
+# Kept for backwards compatibility with the original script; the real switch
+# now lives in settings.py / backend/.env (USE_LOCAL_EMBEDDINGS).
+USE_LOCAL = settings.USE_LOCAL_EMBEDDINGS
 
 def research_pipelinne(topic:str)->dict:
     state = {}
@@ -31,7 +24,7 @@ def research_pipelinne(topic:str)->dict:
     state['search_results'] = search_results['messages'][-1].content
     print("\n" + "="*50+ "Search Results"+ "=*50" + "\n")
     pprint(state['search_results'])
-    
+
     #step 2: Scrape the content from the URLs found in the search results using the scrape agent
     print("\n" + "="*50 + "\n")
     print(f"Scrape Agent is Working")
@@ -45,7 +38,6 @@ def research_pipelinne(topic:str)->dict:
     state['scraped_content'] = reader_results['messages'][-1].content
     print("\n" + "="*50+ "Scraped Content"+ "=*50" + "\n")
     print(state['scraped_content'])
-    research_combined =(f"Search Results:\n{state['search_results']}\n\nScraped Content:\n{state['scraped_content']}")
 
     #step 3: Writter agent to generate a research report based on the gathered information
 
@@ -62,7 +54,7 @@ def research_pipelinne(topic:str)->dict:
         "topic": topic,
         "research": research_combined
     })
-    
+
     print("\n" + "="*50+ "Research Report"+ "=*50" + "\n")
     print(state["report"])
 
@@ -83,87 +75,29 @@ def research_pipelinne(topic:str)->dict:
         state["score"] = score
     else:
         print("Score not found in the critic report.")
-        state["score"] = None      
+        state["score"] = None
     print("\n" + "="*50+ "Critic Report"+ "="*50 + "\n")
     print(state["critic_report"])
 
     return state
 
-def get_pdf_hash(pdf_path):
-    sha256 = hashlib.sha256()
 
-    with open(pdf_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            sha256.update(chunk)
+def pdf_research_pipeline(pdf_path: str, query: str, embeddings=None) -> str:
 
-    return sha256.hexdigest()
+    status = index_pdf(pdf_path, embeddings)
+    print("New PDF" if status["indexed"] else "Already indexed")
 
-
-def get_embeddings():
-    if USE_LOCAL:
-        print("Using Local Embedding Model")
-
-        return HuggingFaceEmbeddings(
-            model_name=r"C:\OpenSourcesModels\HuggingFace\Embeddings\hub\models--sentence-transformers--all-mpnet-base-v2\snapshots\e8c3b32edf5434bc2275fc9bab85f82640a19130",
-            model_kwargs={"device": "cuda"},
-        )
-
-    print("Using Hugging Face API")
-
-    return HuggingFaceEndpointEmbeddings(
-        model="BAAI/bge-small-en-v1.5",
-        huggingfacehub_api_token=os.environ.get("HUGGINGFACEHUB_API_TOKEN"),
-    )
-
-
-
-def pdf_research_pipeline(pdf_path: str, query: str, embeddings) -> str:
-
-
-
-    doc_hash = get_pdf_hash(pdf_path)
-
-    vector_store = Chroma(
-        collection_name=doc_hash,
-        embedding_function=embeddings,
-        persist_directory="./chroma_persist",
-    )
-
-    if vector_store._collection.count() == 0:
-
-        print("New PDF")
-
-        loader = PyPDFLoader(
-            file_path=pdf_path,
-            mode="page",
-            pages_delimiter="\n\n",
-        )
-
-        docs = loader.load()
-
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=100,
-        )
-
-        chunks = splitter.split_documents(docs)
-
-        vector_store.add_documents(chunks)
-
-    else:
-        print("Already indexed")
+    vector_store = get_vector_store(status["collection"], embeddings)
 
     retriever = vector_store.as_retriever(
-        search_type="similarity_score_threshold",
+        search_type="similarity",
         search_kwargs={
-            "score_threshold": 0.1,
-            "k": 5,
+            "k": settings.RETRIEVAL_K,
         },
     )
 
     docs = retriever.invoke(query)
 
-    
     print("\n" + "=" * 50)
     print("Retrieved Documents")
     print("=" * 50)
@@ -185,7 +119,9 @@ def pdf_research_pipeline(pdf_path: str, query: str, embeddings) -> str:
     })
 
     return research
-def hybrid_research_pipeline(pdf_path: str, topic: str, embeddings) -> dict:
+
+
+def hybrid_research_pipeline(pdf_path: str, topic: str, embeddings=None) -> dict:
 
     # PDF Research
     pdf_research = pdf_research_pipeline(pdf_path, topic, embeddings)
@@ -249,10 +185,10 @@ if __name__ == "__main__":
         print("=" * 50)
 
         print("\nChoose Research Mode:")
-        print("1. 🌐 Web Research")
-        print("2. 📄 PDF Research")
-        print("3. 🔄 Hybrid Research")
-        print("4. ❌ Exit")
+        print("1. Web Research")
+        print("2. PDF Research")
+        print("3. Hybrid Research")
+        print("4. Exit")
 
         choice = input("\nEnter your choice (1/2/3/4): ").strip()
 
@@ -324,6 +260,6 @@ if __name__ == "__main__":
 
         else:
 
-            print("\n❌ Invalid choice. Please select 1, 2, 3, or 4.")
+            print("\nInvalid choice. Please select 1, 2, 3, or 4.")
 
         input("\nPress Enter to return to the main menu...")
