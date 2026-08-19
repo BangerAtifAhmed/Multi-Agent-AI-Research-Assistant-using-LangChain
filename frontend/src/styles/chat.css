@@ -1,0 +1,270 @@
+/* ==========================================================================
+   Automatic routing, composer attachments, conversation search and pinning.
+   Same tokens as index.css, so both themes keep working.
+   ========================================================================== */
+
+/* ------------------------------------------------------- retrieval hint -- */
+
+.retrieval-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px 1px 6px;
+  border-radius: 20px;
+  background: var(--bg-hover);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.retrieval-hint__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ------------------------------------------------------------- composer -- */
+
+.composer__box {
+  display: block;
+  padding: 8px;
+}
+
+.composer__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.composer__attach {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--text-muted);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.composer__attach:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.composer__input {
+  padding: 7px 0;
+}
+
+/* ----------------------------------------------------------- attachment -- */
+
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12.5px;
+}
+
+.attachment--failed {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--danger-soft);
+}
+
+.attachment__icon {
+  display: inline-flex;
+  color: var(--accent);
+  flex: none;
+}
+
+.attachment__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.attachment__state {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.attachment--failed .attachment__state {
+  color: var(--danger);
+}
+
+.attachment--uploading .attachment__state {
+  color: var(--accent);
+}
+
+.attachment__remove {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.attachment__remove:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+/* --------------------------------------------------- conversation search -- */
+
+.sidebar__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 12px 10px;
+}
+
+.sidebar__search-icon {
+  position: absolute;
+  left: 9px;
+  display: inline-flex;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.sidebar__search-input {
+  width: 100%;
+  padding: 7px 26px 7px 29px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  font-size: 12.5px;
+  color: var(--text);
+  transition: border-color 0.12s ease;
+}
+
+.sidebar__search-input:focus {
+  border-color: var(--accent);
+}
+
+.sidebar__search-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.sidebar__search-clear {
+  position: absolute;
+  right: 7px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.sidebar__search-clear:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* --------------------------------------------- conversation item + menu -- */
+
+.conversation {
+  position: relative;
+}
+
+.conversation__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.conversation__pin {
+  font-size: 9px;
+  line-height: 1;
+  margin-right: 4px;
+}
+
+.conversation__snippet {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.conversation__rename {
+  width: 100%;
+  margin: 2px 6px;
+  padding: 6px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  outline: none;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.menu {
+  position: absolute;
+  top: 100%;
+  right: 6px;
+  z-index: 20;
+  min-width: 148px;
+  padding: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.menu__item {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 7px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text);
+  transition: background 0.1s ease;
+}
+
+.menu__item:hover {
+  background: var(--bg-hover);
+}
+
+.menu__item--danger {
+  color: var(--danger);
+}
+
+.menu__item--danger:hover {
+  background: var(--danger-soft);
+}
+
+.menu__confirm {
+  margin: 4px 10px 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------- empty state -- */
+
+.empty__library-link {
+  margin-top: 20px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.empty__library-link:hover {
+  color: var(--accent);
+}

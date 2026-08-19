@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -c '\\\\\\\\begin{itemize}' \"C:/Users/ahmed/AppData/Local/Temp/claude/d--multi-agent-system/310b45cc-e5fa-49c3-b1dd-adcd4a627aa2/scratchpad/resume.tex\")",
+      "Bash(grep -c '\\\\\\\\end{itemize}' \"C:/Users/ahmed/AppData/Local/Temp/claude/d--multi-agent-system/310b45cc-e5fa-49c3-b1dd-adcd4a627aa2/scratchpad/resume.tex\")"
+    ]
+  }
+}

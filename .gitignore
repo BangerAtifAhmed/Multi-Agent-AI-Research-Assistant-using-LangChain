@@ -1,5 +1,20 @@
+# Environment / secrets
 .env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+dist/
+*.log
+
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Local runtime data
+backend/data/
+data/uploads/
+data/documents/
