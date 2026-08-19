@@ -6,7 +6,11 @@ import conversationApi from '../services/conversationApi.js';
 import documentApi from '../services/documentApi.js';
 
 const TERMINAL = new Set(['ready', 'failed']);
-const POLL_MS = 1200;
+const POLL_MS = 1500;
+// Processing is bounded so the chip can never spin forever; the server keeps
+// working regardless, and the Library shows the outcome.
+const PROCESSING_BUDGET_MS = 5 * 60 * 1000;
+const MAX_POLL_ERRORS = 5;
 
 /**
  * The chat surface. Owns the messages of the open conversation, the single
@@ -155,30 +159,65 @@ export default function ChatView({
       setError(null);
       setAttachment({ name: file.name, status: 'uploading', documentId: null });
 
+      const fail = (message) =>
+        setAttachment({ name: file.name, status: 'failed', documentId: null, error: message });
+
+      let document;
       try {
-        const document = await documentApi.uploadDocument(file);
-        onDocumentsChanged?.();
-
-        let current = document;
-        for (let attempt = 0; attempt < 300 && !TERMINAL.has(current.status); attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-          const list = await documentApi.listDocuments();
-          current = list.find((item) => item.id === document.id) ?? current;
-        }
-        onDocumentsChanged?.();
-
-        if (current.status === 'ready') {
-          setAttachment({ name: current.originalFilename, status: 'ready', documentId: current.id });
-        } else {
-          setAttachment({
-            name: current.originalFilename ?? file.name,
-            status: 'failed',
-            documentId: null,
-            error: current.errorMessage || 'Could not process this file',
-          });
-        }
+        // Phase 1: the upload itself. Bounded by a timeout in documentApi.
+        document = await documentApi.uploadDocument(file);
       } catch (uploadError) {
-        setAttachment({ name: file.name, status: 'failed', documentId: null, error: uploadError.message });
+        fail(uploadError.message);
+        return;
+      }
+
+      onDocumentsChanged?.();
+      // Phase 2: the server processes in the background. Distinct from
+      // "uploading" so the user can tell which stage is slow.
+      setAttachment({ name: document.originalFilename ?? file.name, status: 'processing', documentId: null });
+
+      const deadline = Date.now() + PROCESSING_BUDGET_MS;
+      let current = document;
+      let consecutiveErrors = 0;
+
+      while (!TERMINAL.has(current.status)) {
+        if (Date.now() > deadline) {
+          fail(
+            'Still processing after several minutes. It will keep going in the background - ' +
+              'check your Library in a moment.',
+          );
+          onDocumentsChanged?.();
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+
+        try {
+          const list = await documentApi.listDocuments();
+          consecutiveErrors = 0;
+          const found = list.find((item) => item.id === document.id);
+          if (!found) {
+            fail('The document is no longer in your library.');
+            return;
+          }
+          current = found;
+        } catch (pollError) {
+          // A restarting server drops a few polls; only give up if it persists.
+          consecutiveErrors += 1;
+          if (consecutiveErrors >= MAX_POLL_ERRORS) {
+            fail(`Lost contact with the server while processing. ${pollError.message}`);
+            return;
+          }
+        }
+      }
+
+      onDocumentsChanged?.();
+
+      if (current.status === 'ready') {
+        setAttachment({ name: current.originalFilename, status: 'ready', documentId: current.id });
+      } else {
+        // Surface the server's actual reason (e.g. interrupted, unreadable).
+        fail(current.errorMessage || 'Could not process this file.');
       }
     },
     [onDocumentsChanged],
@@ -190,7 +229,7 @@ export default function ChatView({
   const sendMessage = useCallback(
     (text) => {
       if (isStreaming) return;
-      if (attachment?.status === 'uploading') {
+      if (attachment?.status === 'uploading' || attachment?.status === 'processing') {
         setError('Wait for the attachment to finish processing.');
         return;
       }

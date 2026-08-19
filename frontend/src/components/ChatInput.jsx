@@ -55,7 +55,7 @@ function ChatInput({
     if (file) onAttach?.(file);
   };
 
-  const busy = attachment?.status === 'uploading';
+  const busy = attachment?.status === 'uploading' || attachment?.status === 'processing';
 
   return (
     <div className="composer">
@@ -95,7 +95,8 @@ function ChatInput({
             </span>
 
             <span className="attachment__state">
-              {attachment.status === 'uploading' && 'Processing…'}
+              {attachment.status === 'uploading' && 'Uploading…'}
+              {attachment.status === 'processing' && 'Processing…'}
               {attachment.status === 'ready' && 'Attached'}
               {attachment.status === 'failed' && (attachment.error || 'Upload failed')}
             </span>

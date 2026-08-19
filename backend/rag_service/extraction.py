@@ -20,6 +20,7 @@ PDF -> page, DOCX -> section/paragraph, PPTX -> slide, TXT/MD -> line/section.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -37,6 +38,10 @@ KNOWN_EXTENSIONS = {".pdf", ".txt", ".md", ".docx", ".doc", ".pptx", ".ppt"}
 # scanned and sent to OCR. Deliberately low so normal text PDFs are never OCRed.
 OCR_CHAR_THRESHOLD = 40
 OCR_DPI = 200
+
+# Pages read before the PDF reader is reopened to release its object cache.
+# Peak memory scales with this, not with the length of the document.
+PDF_PAGE_WINDOW = max(1, int(os.getenv("PDF_PAGE_WINDOW", "50")))
 
 
 class ExtractionError(Exception):
@@ -142,12 +147,26 @@ def _ocr_pdf_pages(path: Path, page_numbers: list[int], progress=None) -> dict[i
     return results
 
 
-def _extract_pdf(path: Path, name: str, progress=None) -> tuple[list[dict], dict]:
-    """PyPDF for text pages; OCR only for the pages that have none.
+def _ocr_one_page(document, page_index: int) -> str:
+    """OCR a single already-open PDF page. Nothing is retained afterwards."""
+    import pytesseract
+    from PIL import Image
 
-    A mixed PDF (some real text pages, some scanned images) gets both: text
-    pages are read directly and only the image pages are sent to OCR.
-    """
+    page = document[page_index]
+    pixmap = page.get_pixmap(dpi=OCR_DPI)
+    try:
+        image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+        try:
+            return pytesseract.image_to_string(image).strip()
+        finally:
+            image.close()
+    finally:
+        # Release the rendered bitmap immediately; a 200 DPI page is ~10 MB.
+        del pixmap
+
+
+def _open_pdf(path: Path):
+    """Opens a PDF for reading, unlocking it if it has an empty user password."""
     from pypdf import PdfReader
 
     try:
@@ -160,7 +179,7 @@ def _extract_pdf(path: Path, name: str, progress=None) -> tuple[list[dict], dict
                     "This PDF is password protected. Remove the password and upload it again.",
                     "ENCRYPTED",
                 )
-        pages = [(page.extract_text() or "").strip() for page in reader.pages]
+        return reader
     except ExtractionError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -169,31 +188,114 @@ def _extract_pdf(path: Path, name: str, progress=None) -> tuple[list[dict], dict
             "PARSE_FAILED",
         ) from exc
 
-    if not pages:
+
+def _close_pdf(reader) -> None:
+    """Releases the file handle and every cached object held by the reader."""
+    try:
+        reader.close()
+    except Exception:  # noqa: BLE001
+        # Older pypdf has no close(); drop the caches by hand instead.
+        for attribute in ("resolved_objects", "xref", "xref_objStm"):
+            try:
+                getattr(reader, attribute).clear()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _iter_pdf_blocks(path: Path, name: str, progress=None, info: dict | None = None):
+    """Yield one block per page, reading the PDF a page at a time.
+
+    Peak memory is one window of pages rather than the whole document, so a
+    500-page file costs about the same as a 50-page one. Pages whose embedded
+    text is too short are OCRed individually, preserving the "never OCR a page
+    that already has text" behaviour.
+    """
+    info = info if info is not None else {}
+
+    reader = _open_pdf(path)
+    try:
+        page_count = len(reader.pages)
+    except Exception as exc:  # noqa: BLE001
+        _close_pdf(reader)
+        raise ExtractionError(
+            "Could not read this PDF. It may be corrupted or not a valid PDF file.",
+            "PARSE_FAILED",
+        ) from exc
+
+    if not page_count:
+        _close_pdf(reader)
         raise ExtractionError("This PDF has no pages.", "EMPTY_DOCUMENT")
 
-    needs_ocr = [index for index, text in enumerate(pages) if len(text) < OCR_CHAR_THRESHOLD]
-    used_ocr = False
+    info["pageCount"] = page_count
+    ocr_pages = 0
+    ocr_document = None
 
-    # Only OCR when there is something to gain.
-    if needs_ocr:
-        ocr_text = _ocr_pdf_pages(path, needs_ocr, progress)
-        for index, text in ocr_text.items():
-            if text:
-                pages[index] = text
-                used_ocr = True
+    try:
+        for index in range(page_count):
+            # pypdf caches every object it resolves for the life of the reader,
+            # so memory grows with the number of pages read no matter how the
+            # output is batched. Reopening at each window boundary drops that
+            # cache; nothing already emitted is needed again.
+            if index and index % PDF_PAGE_WINDOW == 0:
+                _close_pdf(reader)
+                reader = _open_pdf(path)
 
-    blocks = [
-        {"text": text, "metadata": {"page": index + 1}}
-        for index, text in enumerate(pages)
-        if text.strip()
-    ]
+            try:
+                text = (reader.pages[index].extract_text() or "").strip()
+            except Exception:
+                text = ""
 
-    return blocks, {
-        "pageCount": len(pages),
-        "usedOcr": used_ocr,
-        "ocrPages": len(needs_ocr) if used_ocr else 0,
-    }
+            # Scanned page: OCR just this one.
+            if len(text) < OCR_CHAR_THRESHOLD:
+                if not capabilities.ocr_available():
+                    raise ExtractionError(
+                        "This PDF appears to be scanned and needs OCR, but the Tesseract OCR "
+                        "engine is not installed on the server. Install Tesseract, or upload a "
+                        "PDF that has selectable text.",
+                        "OCR_UNAVAILABLE",
+                    )
+
+                import pymupdf
+                import pytesseract
+
+                if ocr_document is None:
+                    pytesseract.pytesseract.tesseract_cmd = capabilities.tesseract_path()
+                    ocr_document = pymupdf.open(str(path))
+
+                if progress:
+                    progress(index + 1, ocr_pages + 1, page_count)
+
+                try:
+                    recognised = _ocr_one_page(ocr_document, index)
+                except ExtractionError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    raise ExtractionError(
+                        f"OCR failed on page {index + 1}: {exc}", "OCR_FAILED"
+                    ) from exc
+
+                if recognised:
+                    text = recognised
+                    ocr_pages += 1
+
+            if text.strip():
+                yield {"text": text, "metadata": {"page": index + 1}}
+    finally:
+        _close_pdf(reader)
+        if ocr_document is not None:
+            ocr_document.close()
+
+    info["usedOcr"] = ocr_pages > 0
+    info["ocrPages"] = ocr_pages
+
+
+def _extract_pdf(path: Path, name: str, progress=None) -> tuple[list[dict], dict]:
+    """Eager wrapper kept for callers that want the whole document at once."""
+    info: dict = {}
+    blocks = list(_iter_pdf_blocks(path, name, progress, info))
+    info.setdefault("usedOcr", False)
+    info.setdefault("ocrPages", 0)
+    return blocks, info
 
 
 # --------------------------------------------------------------------------
@@ -474,49 +576,120 @@ def extract_blocks(file_path: str, display_name: str | None = None, progress=Non
     return extractor(path, name)
 
 
-def extract_chunks(file_path: str, display_name: str | None = None, progress=None) -> dict:
-    """Full extraction + chunking. Returns chunks ready for embedding.
+def iter_blocks(file_path: str, display_name: str | None = None, progress=None, info=None):
+    """Yield normalised blocks lazily.
 
-    Chunking is unchanged: RecursiveCharacterTextSplitter at the configured
-    1000 / 100 sizes, with each chunk inheriting its source block's metadata.
+    PDFs stream a page at a time, which is where the memory matters. The other
+    formats are parsed by libraries that load the whole file anyway, so their
+    blocks are produced up front and then yielded one by one - still avoiding a
+    second full copy downstream.
+    """
+    path, name, extension = _prepare(file_path, display_name)
+    info = info if info is not None else {}
+
+    if extension == ".pdf":
+        yield from _iter_pdf_blocks(path, name, progress, info)
+        return
+
+    blocks, block_info = EXTRACTORS[extension](path, name)
+    info.update(block_info)
+    for block in blocks:
+        yield block
+
+
+def iter_chunk_batches(
+    file_path: str,
+    display_name: str | None = None,
+    batch_size: int = 64,
+    progress=None,
+    info=None,
+):
+    """Yield lists of at most `batch_size` chunks, ready to embed.
+
+    This is the memory-bounded entry point used by ingestion: at no point does
+    more than one batch of chunks exist, so a 1000-page document costs roughly
+    the same as a one-page one. Chunking itself is unchanged
+    (RecursiveCharacterTextSplitter at the configured 1000 / 100).
     """
     path = Path(file_path)
     name = display_name or path.name
-
-    blocks, info = extract_blocks(file_path, name, progress)
-
-    if not blocks:
-        raise ExtractionError(
-            "Could not extract readable text from this document. It may contain only images, "
-            "or its text may not be selectable.",
-            "NO_TEXT_EXTRACTED",
-        )
+    info = info if info is not None else {}
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=settings.CHUNK_SIZE,
         chunk_overlap=settings.CHUNK_OVERLAP,
     )
 
-    chunks: list[dict] = []
-    for block in blocks:
+    batch: list[dict] = []
+    produced = 0
+
+    for block in iter_blocks(file_path, name, progress, info):
         for piece in splitter.split_text(block["text"]):
             content = piece.strip()
             if not content:
                 continue
-            chunks.append(
+
+            batch.append(
                 {
                     "content": content,
                     "metadata": {
                         "document_name": name,
-                        "chunk_index": len(chunks),
+                        "chunk_index": produced,
                         **block["metadata"],
                     },
                 }
             )
+            produced += 1
 
-    if not chunks:
+            if len(batch) >= batch_size:
+                yield batch
+                # Hand ownership to the consumer and start a fresh list, so the
+                # batch just yielded can be collected as soon as it is used.
+                batch = []
+
+    if batch:
+        yield batch
+
+    info["blocks"] = info.get("blocks", 0)
+    info["chunks"] = produced
+
+    if produced == 0:
         raise ExtractionError(
-            "Could not extract readable text from this document.", "NO_TEXT_EXTRACTED"
+            "Could not extract readable text from this document. It may contain only images, "
+            "or its text may not be selectable.",
+            "NO_TEXT_EXTRACTED",
         )
 
-    return {"chunks": chunks, "info": {**info, "blocks": len(blocks)}}
+
+def _prepare(file_path: str, display_name: str | None):
+    """Shared validation: existence, known type, non-empty."""
+    path = Path(file_path)
+    if not path.exists():
+        raise ExtractionError("The uploaded file could not be found on the server.", "FILE_MISSING")
+
+    extension = path.suffix.lower()
+    if extension not in KNOWN_EXTENSIONS:
+        raise UnsupportedFormat(
+            f"Unsupported file type '{extension or 'unknown'}'. "
+            f"Supported: {', '.join(sorted(KNOWN_EXTENSIONS))}."
+        )
+
+    if path.stat().st_size == 0:
+        raise ExtractionError("This file is empty.", "EMPTY_DOCUMENT")
+
+    return path, display_name or path.name, extension
+
+
+def extract_chunks(file_path: str, display_name: str | None = None, progress=None) -> dict:
+    """Full extraction + chunking, materialised.
+
+    Thin wrapper over iter_chunk_batches for callers that genuinely want every
+    chunk at once (the tests, the legacy CLI). Ingestion uses the streaming
+    generator instead so it never holds the whole document.
+    """
+    info: dict = {}
+    chunks: list[dict] = []
+    for batch in iter_chunk_batches(file_path, display_name, 64, progress, info):
+        chunks.extend(batch)
+
+    return {"chunks": chunks, "info": {**info, "blocks": info.get("blocks", len(chunks))}}

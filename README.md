@@ -6,6 +6,7 @@ answered from **their own documents** with streamed, cited responses.
 
 **React + Express + Neon PostgreSQL + pgvector + Upstash Redis + Google OAuth +
 email/password auth + RAG + chat history + document library + real LLM streaming
+
 + rate limiting + caching.**
 
 The original project's RAG pipeline is preserved throughout: the same Mistral
@@ -66,12 +67,12 @@ the same SQL statement as the vector search. The Python service exists only for
 the parts that need the ML stack, and it is private to the backend — bound to
 `127.0.0.1`, started and stopped by Express, never reachable from a browser:
 
-| Runs in Express | Runs in the Python RAG service |
-| --- | --- |
-| Auth, sessions, rate limiting, caching | Embeddings (local CUDA, 768-dim) |
-| **pgvector similarity search (user-scoped)** | Text extraction + chunking |
-| Context assembly and citation numbering | Tavily web search + page scraping |
-| Chat history, conversations, documents | Query rewriting, LLM streaming |
+| Runs in Express                                    | Runs in the Python RAG service    |
+| -------------------------------------------------- | --------------------------------- |
+| Auth, sessions, rate limiting, caching             | Embeddings (local CUDA, 768-dim)  |
+| **pgvector similarity search (user-scoped)** | Text extraction + chunking        |
+| Context assembly and citation numbering            | Tavily web search + page scraping |
+| Chat history, conversations, documents             | Query rewriting, LLM streaming    |
 
 Keeping the embedding model in Python is deliberate: the vectors stored in
 `document_chunks.embedding` are produced by `sentence-transformers/all-mpnet-base-v2`,
@@ -155,7 +156,7 @@ npm run migrate           # create the schema (safe to re-run)
 npm run dev
 ```
 
-Express starts on <http://localhost:3000> and launches the Python RAG service
+Express starts on [http://localhost:3000](http://localhost:3000) and launches the Python RAG service
 itself. The **first boot takes 1–3 minutes** while torch and the embedding model
 load; `GET /api/health` reports progress.
 
@@ -167,7 +168,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>.
+Open [http://localhost:5173](http://localhost:5173).
 
 ### Migrations
 
@@ -197,15 +198,15 @@ against the legacy Chroma store in `chroma_persist/`.
 **Neon PostgreSQL** is the source of truth for everything permanent, with
 **pgvector** for embeddings.
 
-| Table | Holds |
-| --- | --- |
-| `users` | name, email, `password_hash`, `google_id`, avatar |
-| `sessions` | server-side sessions (so logout is a real revocation) |
-| `documents` | per-user metadata, `storage_key`, status, chunk count |
-| `document_chunks` | content, metadata, **`embedding vector(768)`**, `user_id` |
-| `conversations` | per-user chats, mode, selected document |
-| `messages` | role, content, metadata (finish reason, critic review) |
-| `message_sources` | citations linked to a message, chunk and document |
+| Table               | Holds                                                              |
+| ------------------- | ------------------------------------------------------------------ |
+| `users`           | name, email,`password_hash`, `google_id`, avatar               |
+| `sessions`        | server-side sessions (so logout is a real revocation)              |
+| `documents`       | per-user metadata,`storage_key`, status, chunk count             |
+| `document_chunks` | content, metadata,**`embedding vector(768)`**, `user_id` |
+| `conversations`   | per-user chats, mode, selected document                            |
+| `messages`        | role, content, metadata (finish reason, critic review)             |
+| `message_sources` | citations linked to a message, chunk and document                  |
 
 Notes:
 
@@ -325,16 +326,16 @@ Document -> format-specific extraction -> [OCR if scanned] -> normalised text
 
 The embedding model and dimension are unchanged.
 
-| Format | Library | System dependency | Metadata kept |
-| --- | --- | --- | --- |
-| **PDF** (text) | `pypdf` | none | page number |
-| **PDF** (scanned) | `pytesseract` + `pymupdf` | **Tesseract OCR** | page number |
-| **DOCX** | `python-docx` | none | paragraph, heading/section, table |
-| **PPTX** | `python-pptx` | none | slide number, slide title, notes |
-| **TXT** | stdlib | none | line number |
-| **MD** | stdlib | none | line number, heading/section |
-| **DOC** (legacy) | LibreOffice → `python-docx` | **LibreOffice** | as DOCX |
-| **PPT** (legacy) | LibreOffice → `python-pptx` | **LibreOffice** | as PPTX |
+| Format                  | Library                       | System dependency       | Metadata kept                     |
+| ----------------------- | ----------------------------- | ----------------------- | --------------------------------- |
+| **PDF** (text)    | `pypdf`                     | none                    | page number                       |
+| **PDF** (scanned) | `pytesseract` + `pymupdf` | **Tesseract OCR** | page number                       |
+| **DOCX**          | `python-docx`               | none                    | paragraph, heading/section, table |
+| **PPTX**          | `python-pptx`               | none                    | slide number, slide title, notes  |
+| **TXT**           | stdlib                        | none                    | line number                       |
+| **MD**            | stdlib                        | none                    | line number, heading/section      |
+| **DOC** (legacy)  | LibreOffice →`python-docx` | **LibreOffice**   | as DOCX                           |
+| **PPT** (legacy)  | LibreOffice →`python-pptx` | **LibreOffice**   | as PPTX                           |
 
 ### Honest capability reporting
 
@@ -507,14 +508,14 @@ Two drivers are supported, chosen automatically:
 **Rate limits** (fixed window, keyed by user id when authenticated, otherwise by
 client IP):
 
-| Endpoint | Default limit |
-| --- | --- |
-| `POST /api/auth/login` | 5 / 15 min / IP |
-| `POST /api/auth/signup` | 5 / hour / IP |
-| `GET /api/auth/google` | 20 / 15 min / IP |
-| `POST /api/chat` | 20 / min / user |
-| `POST /api/documents` | 10 / hour / user |
-| everything under `/api` | 300 / min (safety net) |
+| Endpoint                  | Default limit          |
+| ------------------------- | ---------------------- |
+| `POST /api/auth/login`  | 5 / 15 min / IP        |
+| `POST /api/auth/signup` | 5 / hour / IP          |
+| `GET /api/auth/google`  | 20 / 15 min / IP       |
+| `POST /api/chat`        | 20 / min / user        |
+| `POST /api/documents`   | 10 / hour / user       |
+| everything under`/api`  | 300 / min (safety net) |
 
 Exceeding a limit returns **429** with `Retry-After` and `X-RateLimit-*` headers.
 
@@ -524,30 +525,30 @@ Exceeding a limit returns **429** with `Retry-After` and `X-RateLimit-*` headers
 
 All routes except `/api/health` and `/api/auth/*` require a session.
 
-| Method | Path | Description |
-| --- | --- | --- |
-| `POST` | `/api/auth/signup` | Create an account (name, email, password, confirmPassword) |
-| `POST` | `/api/auth/login` | Sign in |
-| `POST` | `/api/auth/logout` | Revoke the current session |
-| `GET` | `/api/auth/me` | The signed-in user |
-| `GET` | `/api/auth/config` | Whether Google sign-in is configured |
-| `GET` | `/api/auth/google` | Start the Google OAuth flow |
-| `GET` | `/api/auth/google/callback` | OAuth callback (redirects to the frontend) |
-| `POST` | `/api/chat` | Send a message, receive an SSE stream |
-| `GET` | `/api/conversations` | List the user's conversations |
-| `POST` | `/api/conversations` | Create a conversation |
-| `GET` | `/api/conversations/:id` | One conversation |
-| `GET` | `/api/conversations/:id/messages` | Full message history with citations |
-| `PATCH` | `/api/conversations/:id` | Rename / change mode or document |
-| `DELETE` | `/api/conversations/:id` | Delete a conversation |
-| `DELETE` | `/api/conversations/:id/messages` | Clear messages |
-| `GET` | `/api/documents` | The user's library |
-| `POST` | `/api/documents` | Upload + index a document (multipart `file`) |
-| `DELETE` | `/api/documents/:id` | Delete a document, its chunks and its file |
-| `GET` | `/api/user` | Profile and usage statistics |
-| `PATCH` | `/api/user` | Update the display name |
-| `POST` | `/api/user/logout-all` | Revoke every session |
-| `GET` | `/api/health` | Express, PostgreSQL, Redis and RAG status |
+| Method     | Path                                | Description                                                |
+| ---------- | ----------------------------------- | ---------------------------------------------------------- |
+| `POST`   | `/api/auth/signup`                | Create an account (name, email, password, confirmPassword) |
+| `POST`   | `/api/auth/login`                 | Sign in                                                    |
+| `POST`   | `/api/auth/logout`                | Revoke the current session                                 |
+| `GET`    | `/api/auth/me`                    | The signed-in user                                         |
+| `GET`    | `/api/auth/config`                | Whether Google sign-in is configured                       |
+| `GET`    | `/api/auth/google`                | Start the Google OAuth flow                                |
+| `GET`    | `/api/auth/google/callback`       | OAuth callback (redirects to the frontend)                 |
+| `POST`   | `/api/chat`                       | Send a message, receive an SSE stream                      |
+| `GET`    | `/api/conversations`              | List the user's conversations                              |
+| `POST`   | `/api/conversations`              | Create a conversation                                      |
+| `GET`    | `/api/conversations/:id`          | One conversation                                           |
+| `GET`    | `/api/conversations/:id/messages` | Full message history with citations                        |
+| `PATCH`  | `/api/conversations/:id`          | Rename / change mode or document                           |
+| `DELETE` | `/api/conversations/:id`          | Delete a conversation                                      |
+| `DELETE` | `/api/conversations/:id/messages` | Clear messages                                             |
+| `GET`    | `/api/documents`                  | The user's library                                         |
+| `POST`   | `/api/documents`                  | Upload + index a document (multipart`file`)              |
+| `DELETE` | `/api/documents/:id`              | Delete a document, its chunks and its file                 |
+| `GET`    | `/api/user`                       | Profile and usage statistics                               |
+| `PATCH`  | `/api/user`                       | Update the display name                                    |
+| `POST`   | `/api/user/logout-all`            | Revoke every session                                       |
+| `GET`    | `/api/health`                     | Express, PostgreSQL, Redis and RAG status                  |
 
 ### `POST /api/chat`
 
@@ -563,15 +564,15 @@ All routes except `/api/health` and `/api/auth/*` require a session.
 
 Response is `text/event-stream`:
 
-| Event | Payload |
-| --- | --- |
-| `meta` | conversation, persisted user message, assistant message id |
-| `status` | pipeline stage (`rewriting`, `retrieving`, `searching`, `generating`) |
-| `sources` | citations, sent before the first token |
-| `token` | `{ "text": "…" }` — one chunk of the answer |
-| `critique` | one chunk of the optional critic review |
-| `done` | finish reason (`stop` / `aborted` / `error`) and the saved message |
-| `error` | user-safe error message |
+| Event        | Payload                                                                       |
+| ------------ | ----------------------------------------------------------------------------- |
+| `meta`     | conversation, persisted user message, assistant message id                    |
+| `status`   | pipeline stage (`rewriting`, `retrieving`, `searching`, `generating`) |
+| `sources`  | citations, sent before the first token                                        |
+| `token`    | `{ "text": "…" }` — one chunk of the answer                               |
+| `critique` | one chunk of the optional critic review                                       |
+| `done`     | finish reason (`stop` / `aborted` / `error`) and the saved message      |
+| `error`    | user-safe error message                                                       |
 
 ### `GET /api/health`
 

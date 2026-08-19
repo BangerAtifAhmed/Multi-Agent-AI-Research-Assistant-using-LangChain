@@ -87,12 +87,21 @@ async function parseError(response) {
   return error;
 }
 
-export async function request(path, { method = 'GET', body, signal, headers } = {}) {
+export async function request(path, { method = 'GET', body, signal, headers, timeoutMs } = {}) {
+  // Without a deadline a stalled request never settles, and any spinner it
+  // drives spins forever. Callers that can take a while (uploads) pass a
+  // generous timeoutMs; everything else inherits the default.
+  const timeoutSignal = timeoutMs ? AbortSignal.timeout(timeoutMs) : null;
+  const effectiveSignal =
+    signal && timeoutSignal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : signal || timeoutSignal || undefined;
+
   let response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       method,
-      signal,
+      signal: effectiveSignal,
       credentials: 'include',
       headers: {
         ...(body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
@@ -101,6 +110,14 @@ export async function request(path, { method = 'GET', body, signal, headers } = 
       body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
     });
   } catch (error) {
+    // A timeout surfaces as TimeoutError; distinguish it from a user-initiated
+    // abort so the UI can say something accurate.
+    if (error?.name === 'TimeoutError' || (timeoutSignal?.aborted && !signal?.aborted)) {
+      throw new ApiRequestError(
+        'The server took too long to respond. It may be busy or restarting - please try again.',
+        { code: 'TIMEOUT' },
+      );
+    }
     if (error?.name === 'AbortError') throw error;
     throw new ApiRequestError(NETWORK_MESSAGE, { code: 'NETWORK_ERROR' });
   }
@@ -108,7 +125,16 @@ export async function request(path, { method = 'GET', body, signal, headers } = 
   if (!response.ok) throw await parseError(response);
   if (response.status === 204) return null;
 
-  return response.json();
+  // A restarting or proxied server can answer with an HTML error page; treating
+  // that as JSON would throw an opaque SyntaxError.
+  try {
+    return await response.json();
+  } catch {
+    throw new ApiRequestError(
+      'The server returned an unexpected response. It may be restarting - please try again.',
+      { code: 'INVALID_RESPONSE', status: response.status },
+    );
+  }
 }
 
 /** POST that returns a raw streaming response (used for SSE). */

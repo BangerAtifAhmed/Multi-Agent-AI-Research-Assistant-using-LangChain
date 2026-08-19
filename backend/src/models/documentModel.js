@@ -153,6 +153,15 @@ export async function insertChunks(client, { documentId, userId, chunks, embeddi
   return result.rowCount;
 }
 
+/** Removes every chunk of a document without touching the document row. */
+export async function deleteChunks(userId, documentId) {
+  const { rowCount } = await query(
+    'DELETE FROM document_chunks WHERE document_id = $1 AND user_id = $2',
+    [documentId, userId],
+  );
+  return rowCount;
+}
+
 /**
  * Deletes a document and everything derived from it, in one transaction.
  * Returns the storage key so the caller can remove the original file.
@@ -197,6 +206,7 @@ export default {
   updateStatus,
   failStaleProcessing,
   insertChunks,
+  deleteChunks,
   deleteDocument,
   countReadyDocuments,
 };

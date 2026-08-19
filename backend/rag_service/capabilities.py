@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -64,6 +65,21 @@ def _clean(value: str | None) -> str:
     return value.strip().strip('"').strip("'").strip()
 
 
+def _is_foreign_path(value: str) -> bool:
+    """True when a configured path belongs to a different operating system.
+
+    A Windows .env copied into a Linux container arrives as
+    `C:\\Program Files\\LibreOffice\\program\\soffice.exe`, which cannot exist
+    there. Recognising the shape lets us ignore it as configuration noise
+    rather than reporting it as a broken setting.
+    """
+    windows_shaped = bool(re.match(r"^[A-Za-z]:[\\/]", value)) or value.startswith("\\\\")
+    if os.name == "nt":
+        # On Windows, a POSIX absolute path is the foreign one.
+        return value.startswith("/")
+    return windows_shaped
+
+
 def _find_binary(env_vars: list[str], names: list[str], candidates: list[str]) -> str | None:
     for env_var in env_vars:
         configured = _clean(os.getenv(env_var))
@@ -71,6 +87,17 @@ def _find_binary(env_vars: list[str], names: list[str], candidates: list[str]) -
             continue
         if Path(configured).exists():
             return configured
+
+        if _is_foreign_path(configured):
+            # Very likely a development value inherited by a container.
+            print(
+                f"[capabilities] ignoring {env_var}='{configured}': that is a "
+                f"{'POSIX' if os.name == 'nt' else 'Windows'} path and this host is "
+                f"{'Windows' if os.name == 'nt' else 'POSIX'}; detecting automatically",
+                file=sys.stderr,
+            )
+            continue
+
         # Configured but wrong: say so loudly instead of silently falling back.
         print(
             f"[capabilities] {env_var} is set to '{configured}' but no file exists there; "

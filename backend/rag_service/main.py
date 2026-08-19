@@ -61,6 +61,8 @@ class EmbedRequest(BaseModel):
 class ExtractRequest(BaseModel):
     path: str
     name: str | None = None
+    # Chunks per streamed frame. Bounds memory on both sides of the pipe.
+    batchSize: int = 64
 
 
 class CondenseRequest(BaseModel):
@@ -163,7 +165,7 @@ async def extract(body: ExtractRequest, x_service_token: str | None = Header(def
     """
     _authorize(x_service_token)
 
-    events: queue.Queue = queue.Queue(maxsize=256)
+    events: queue.Queue = queue.Queue(maxsize=8)
 
     def worker() -> None:
         try:
@@ -174,15 +176,19 @@ async def extract(body: ExtractRequest, x_service_token: str | None = Header(def
                     {"type": "status", "stage": "ocr", "page": page, "done": done, "total": total}
                 )
 
-            result = extraction.extract_chunks(body.path, body.name, progress)
-            events.put(
-                {
-                    "type": "result",
-                    "chunks": result["chunks"],
-                    "count": len(result["chunks"]),
-                    "info": result["info"],
-                }
-            )
+            # Chunks are streamed in bounded batches instead of one huge frame,
+            # so neither this process nor Express ever holds the whole document.
+            # The queue is bounded too: if Express falls behind, `put` blocks and
+            # extraction pauses rather than buffering the rest of the file.
+            info: dict = {}
+            total = 0
+            for batch in extraction.iter_chunk_batches(
+                body.path, body.name, body.batchSize, progress, info
+            ):
+                total += len(batch)
+                events.put({"type": "chunks", "chunks": batch, "count": len(batch)})
+
+            events.put({"type": "result", "count": total, "info": info})
         except extraction.ExtractionError as exc:
             events.put({"type": "error", "code": exc.code, "message": str(exc)})
         except Exception as exc:  # noqa: BLE001

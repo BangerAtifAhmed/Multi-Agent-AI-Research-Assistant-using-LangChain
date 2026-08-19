@@ -5,11 +5,18 @@ export const listDocuments = () => request('/documents').then((data) => data.doc
 /** Which formats this deployment accepts and can actually process. */
 export const getFormats = () => request('/documents/formats');
 
+/** Upload can be slow for a large file on a cold server, but never unbounded. */
+export const UPLOAD_TIMEOUT_MS = 120_000;
+
 export const uploadDocument = (file) => {
   const form = new FormData();
   form.append('file', file);
   // Returns 202: the document row exists, processing continues in background.
-  return request('/documents', { method: 'POST', body: form }).then((data) => data.document);
+  return request('/documents', {
+    method: 'POST',
+    body: form,
+    timeoutMs: UPLOAD_TIMEOUT_MS,
+  }).then((data) => data.document);
 };
 
 export const deleteDocument = (id) => request(`/documents/${id}`, { method: 'DELETE' });

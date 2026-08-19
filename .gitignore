@@ -18,3 +18,8 @@ venv/
 backend/data/
 data/uploads/
 data/documents/
+
+# Large test fixtures, generated on demand by the memory/scalability tests
+backend/rag_service/tests/fixtures/large.pdf
+backend/rag_service/tests/fixtures/large_half.pdf
+backend/rag_service/tests/fixtures/large_1000.pdf

@@ -166,90 +166,76 @@ async function handleProcessingFailure({ userId, document, storageKey, error }) 
   const isApiError = error instanceof ApiError;
   logger.error(`ingestion failed for document ${document.id}: ${error.message}`);
 
+  // Ingestion writes chunks batch by batch, so a failure half way through leaves
+  // part of the document indexed. Drop those before marking it failed: a failed
+  // document must never contribute results to a search.
+  const removed = await documentModel
+    .deleteChunks(userId, document.id)
+    .catch((cleanupError) => {
+      logger.warn(`could not clean partial chunks for ${document.id}: ${cleanupError.message}`);
+      return 0;
+    });
+  if (removed) logger.info(`removed ${removed} partial chunks from failed document ${document.id}`);
+
+  // Always reached, whatever stage failed, so a document can never be left
+  // sitting in extracting/chunking/embedding forever.
   await documentModel.updateStatus(document.id, 'failed', {
     errorMessage: isApiError
       ? error.message
       : 'Could not extract readable text from this document.',
     errorCode: (isApiError && error.code) || 'EXTRACTION_FAILED',
+    chunkCount: 0,
   });
 
-  // Keep the original file so the user can see what failed and retry, but drop
-  // any partial chunks that may have been written.
+  // The original file is kept so the user can see what failed and retry.
   await cacheService.invalidateUserDocumentCaches(userId).catch(() => {});
   return null;
 }
 
-async function processDocument({ userId, document, storageKey }) {
-  const filePath = await storageService.getObjectPath(storageKey);
+/** Maps one extracted chunk onto a database row, keeping only real metadata. */
+function toChunkRow(chunk, fallbackIndex, document) {
+  const meta = chunk.metadata ?? {};
+  return {
+    chunkIndex: meta.chunk_index ?? fallbackIndex,
+    content: chunk.content,
+    // Only carry through the fields that were actually produced, so a
+    // citation never shows an invented page or slide number.
+    metadata: {
+      documentName: meta.document_name ?? document.originalFilename,
+      ...(meta.page != null ? { page: meta.page } : {}),
+      ...(meta.slide != null ? { slide: meta.slide } : {}),
+      ...(meta.paragraph != null ? { paragraph: meta.paragraph } : {}),
+      ...(meta.line != null ? { line: meta.line } : {}),
+      ...(meta.section ? { section: meta.section } : {}),
+      ...(meta.title ? { title: meta.title } : {}),
+      ...(meta.table != null ? { table: meta.table } : {}),
+    },
+    embedding: null,
+  };
+}
 
-  // --- extraction (streams status: extracting -> ocr) ----------------------
-  let chunks = [];
-  let info = {};
-
-  await documentModel.updateStatus(document.id, 'extracting');
-
-  for await (const event of ragClient.extractChunksStream(filePath, document.originalFilename)) {
-    if (event.type === 'status') {
-      // 'ocr' only appears for scanned pages, so the UI can say so honestly.
-      await documentModel.updateStatus(document.id, event.stage === 'ocr' ? 'ocr' : 'extracting');
-    } else if (event.type === 'result') {
-      chunks = event.chunks ?? [];
-      info = event.info ?? {};
-    } else if (event.type === 'error') {
-      throw new ApiError(422, event.message, event.code || 'EXTRACTION_FAILED');
-    }
-  }
-
-  if (!chunks.length) {
-    throw new ApiError(
-      422,
-      'Could not extract readable text from this document.',
-      'NO_TEXT_EXTRACTED',
-    );
-  }
-
-  if (!(await stillExists(userId, document.id))) throw new DocumentRemoved();
-
-  // --- chunking is done inside extraction; record the stage for the UI -----
-  await documentModel.updateStatus(document.id, 'chunking', { extractionInfo: info });
-
-  // --- embedding -----------------------------------------------------------
-  await documentModel.updateStatus(document.id, 'embedding');
+/**
+ * Embeds one batch and writes it straight to pgvector.
+ *
+ * Nothing from a batch outlives this call: the texts, the vectors and the rows
+ * are released once the transaction commits, which is what keeps peak memory
+ * flat regardless of document size.
+ */
+async function embedAndInsertBatch({ userId, document, batch, offset }) {
+  const rows = batch.map((chunk, index) => toChunkRow(chunk, offset + index, document));
 
   const { embeddings, model: embeddingModel } = await ragClient.embedPassages(
-    chunks.map((chunk) => chunk.content),
+    rows.map((row) => row.content),
   );
-  if (embeddings.length !== chunks.length) {
+
+  if (embeddings.length !== rows.length) {
     throw ApiError.internal('Embedding count did not match chunk count.', 'EMBEDDING_MISMATCH');
   }
-
-  const rows = chunks.map((chunk, index) => {
-    const meta = chunk.metadata ?? {};
-    return {
-      chunkIndex: meta.chunk_index ?? index,
-      content: chunk.content,
-      // Only carry through the fields that were actually produced, so a
-      // citation never shows an invented page or slide number.
-      metadata: {
-        documentName: meta.document_name ?? document.originalFilename,
-        ...(meta.page != null ? { page: meta.page } : {}),
-        ...(meta.slide != null ? { slide: meta.slide } : {}),
-        ...(meta.paragraph != null ? { paragraph: meta.paragraph } : {}),
-        ...(meta.line != null ? { line: meta.line } : {}),
-        ...(meta.section ? { section: meta.section } : {}),
-        ...(meta.title ? { title: meta.title } : {}),
-        ...(meta.table != null ? { table: meta.table } : {}),
-      },
-      embedding: embeddings[index],
-    };
-  });
-
-  // Last check before writing: the delete may have landed during embedding.
-  if (!(await stillExists(userId, document.id))) throw new DocumentRemoved();
+  for (let index = 0; index < rows.length; index += 1) rows[index].embedding = embeddings[index];
 
   await withTransaction(async (client) => {
     // Re-check inside the transaction and lock the row, so a delete committed
-    // between the check above and this insert cannot orphan chunks.
+    // mid-ingestion cannot orphan chunks.
     const { rowCount } = await client.query(
       'SELECT 1 FROM documents WHERE id = $1 AND user_id = $2 FOR UPDATE',
       [document.id, userId],
@@ -265,14 +251,90 @@ async function processDocument({ userId, document, storageKey }) {
     });
   });
 
+  return { written: rows.length, embeddingModel };
+}
+
+/**
+ * Streaming ingestion.
+ *
+ *   extract a batch -> embed it -> insert it -> discard -> repeat
+ *
+ * Peak memory is one batch, not one document, so a 20 MB PDF with ~1100 chunks
+ * costs about the same as a one-page file. A failure part-way through removes
+ * the chunks already written, so a document never stays half-indexed.
+ */
+async function processDocument({ userId, document, storageKey }) {
+  const filePath = await storageService.getObjectPath(storageKey);
+
+  await documentModel.updateStatus(document.id, 'extracting');
+
+  let info = {};
+  let total = 0;
+  let embeddingModel = null;
+  let announcedEmbedding = false;
+
+  for await (const event of ragClient.extractChunksStream(
+    filePath,
+    document.originalFilename,
+    config.retrieval.ingestBatchSize,
+  )) {
+    if (event.type === 'status') {
+      // 'ocr' only appears for scanned pages, so the UI can say so honestly.
+      await documentModel.updateStatus(
+        document.id,
+        event.stage === 'ocr' ? 'ocr' : 'extracting',
+      );
+      continue;
+    }
+
+    if (event.type === 'error') {
+      throw new ApiError(422, event.message, event.code || 'EXTRACTION_FAILED');
+    }
+
+    if (event.type === 'chunks') {
+      if (!(await stillExists(userId, document.id))) throw new DocumentRemoved();
+
+      if (!announcedEmbedding) {
+        await documentModel.updateStatus(document.id, 'chunking');
+        await documentModel.updateStatus(document.id, 'embedding');
+        announcedEmbedding = true;
+      }
+
+      const result = await embedAndInsertBatch({
+        userId,
+        document,
+        batch: event.chunks ?? [],
+        offset: total,
+      });
+
+      total += result.written;
+      embeddingModel = result.embeddingModel;
+
+      // Keeps the running count visible while a long document is indexed.
+      await documentModel.updateStatus(document.id, 'embedding', { chunkCount: total });
+      continue;
+    }
+
+    if (event.type === 'result') {
+      info = event.info ?? {};
+    }
+  }
+  if (!total) {
+    throw new ApiError(
+      422,
+      'Could not extract readable text from this document.',
+      'NO_TEXT_EXTRACTED',
+    );
+  }
+
   const ready = await documentModel.updateStatus(document.id, 'ready', {
-    chunkCount: rows.length,
+    chunkCount: total,
     extractionInfo: { ...info, embeddingModel },
   });
 
   await cacheService.invalidateUserDocumentCaches(userId);
   logger.info(
-    `indexed document ${document.id}: ${rows.length} chunks${info.usedOcr ? ' (OCR used)' : ''}`,
+    `indexed document ${document.id}: ${total} chunks${info.usedOcr ? ' (OCR used)' : ''}`,
   );
 
   return ready;

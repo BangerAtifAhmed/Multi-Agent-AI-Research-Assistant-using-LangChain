@@ -108,7 +108,7 @@ export async function embedPassages(texts) {
  * Status events arrive while the work happens (including per-page OCR
  * progress), so the caller can persist a live processing stage.
  */
-export async function* extractChunksStream(filePath, name) {
+export async function* extractChunksStream(filePath, name, batchSize) {
   await ensureRagService();
 
   let response;
@@ -116,7 +116,7 @@ export async function* extractChunksStream(filePath, name) {
     response = await fetch(`${config.rag.url}/documents/extract`, {
       method: 'POST',
       headers: serviceHeaders(),
-      body: JSON.stringify({ path: filePath, name }),
+      body: JSON.stringify({ path: filePath, name, batchSize }),
       // OCR on a long scanned PDF is slow; give it room.
       signal: AbortSignal.timeout(1_800_000),
     });

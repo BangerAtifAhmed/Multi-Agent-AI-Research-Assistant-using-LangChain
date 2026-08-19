@@ -288,6 +288,47 @@ BUILDERS = [
 ]
 
 
+# Paragraph used to fill the multi-page scalability fixtures. Roughly two
+# 1000-character chunks per page once the splitter has run.
+_FILLER = (
+    "Retrieval augmented generation grounds a language model in retrieved "
+    "context so that answers can cite real sources rather than relying only "
+    "on parametric memory. Chunking, embedding and vector search each shape "
+    "the quality of the retrieved context in different ways. "
+)
+
+
+def make_paged_pdf(pages: int, filename: str) -> Path:
+    """A text PDF of `pages` pages, rebuilt only when the page count differs.
+
+    Used by the memory tests, which need documents long enough that any
+    per-page accumulation would be obvious. These are generated rather than
+    committed: at 1000 pages the file is far too large to keep in the repo.
+    """
+    import pymupdf
+
+    path = FIXTURES / filename
+    if path.exists():
+        existing = pymupdf.open(str(path))
+        count = existing.page_count
+        existing.close()
+        if count == pages:
+            return path
+
+    FIXTURES.mkdir(parents=True, exist_ok=True)
+    document = pymupdf.open()
+    for number in range(pages):
+        page = document.new_page()
+        page.insert_textbox(
+            pymupdf.Rect(40, 40, 560, 780),
+            f"Page {number + 1}\n" + _FILLER * 6,
+            fontsize=9,
+        )
+    document.save(str(path))
+    document.close()
+    return path
+
+
 def build_all() -> list[Path]:
     FIXTURES.mkdir(parents=True, exist_ok=True)
     created = []

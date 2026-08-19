@@ -131,6 +131,9 @@ export const config = {
     // Cosine distance, not the L2 distance the legacy Chroma CLI path uses.
     maxDistance: Number.parseFloat(str(process.env.RETRIEVAL_MAX_DISTANCE, '0.75')),
     embedBatchSize: int(process.env.EMBED_BATCH_SIZE, 64),
+    // Chunks carried per streamed extraction frame. Peak ingestion memory is
+    // one batch, so lower it on a very small instance.
+    ingestBatchSize: int(process.env.INGEST_BATCH_SIZE, 64),
   },
 
   history: {
