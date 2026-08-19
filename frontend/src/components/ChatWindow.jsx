@@ -16,6 +16,9 @@ function ChatWindow({
   isStreaming,
   attachment,
   onAttach,
+  webSearch,
+  onWebSearchChange,
+  webSearchAvailable,
   onRemoveAttachment,
   onOpenLibrary,
   critique,
@@ -94,6 +97,9 @@ function ChatWindow({
           onSend={onSend}
           onStop={onStop}
           onAttach={onAttach}
+          webSearch={webSearch}
+          onWebSearchChange={onWebSearchChange}
+          webSearchAvailable={webSearchAvailable}
           onRemoveAttachment={onRemoveAttachment}
           attachment={attachment}
           isStreaming={isStreaming}

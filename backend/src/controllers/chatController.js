@@ -19,12 +19,16 @@ import { closeStream, openStream, sendEvent } from '../utils/sse.js';
  * The user comes from the session; `userId` in the body is ignored entirely.
  */
 export async function chat(req, res) {
-  const { conversationId, message, mode, documentId, critique } = req.body ?? {};
+  const { conversationId, message, mode, documentId, critique, webSearch } = req.body ?? {};
 
   // Validate before opening the stream so failures are ordinary HTTP errors
   // (and so the rate limiter's 429 is a normal response, not an SSE frame).
   const text = typeof message === 'string' ? message.trim() : '';
   if (!text) throw ApiError.badRequest('Message must not be empty', 'EMPTY_MESSAGE');
+
+  if (webSearch !== undefined && typeof webSearch !== 'boolean') {
+    throw ApiError.badRequest('webSearch must be a boolean', 'INVALID_WEB_SEARCH');
+  }
 
   const controller = new AbortController();
   let clientGone = false;
@@ -56,6 +60,8 @@ export async function chat(req, res) {
       mode,
       documentId,
       critique,
+      // A request to search the web, not a route: the server still decides.
+      webSearch: webSearch === true,
       signal: controller.signal,
       emit,
     });

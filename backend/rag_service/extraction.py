@@ -43,6 +43,24 @@ OCR_DPI = 200
 # Peak memory scales with this, not with the length of the document.
 PDF_PAGE_WINDOW = max(1, int(os.getenv("PDF_PAGE_WINDOW", "50")))
 
+# How often a text page reports progress. OCR pages always report, being slow.
+PROGRESS_PAGE_INTERVAL = max(1, int(os.getenv("PROGRESS_PAGE_INTERVAL", "10")))
+
+
+def _report(progress, **event) -> None:
+    """Send one progress event, if anybody is listening.
+
+    Every field is a real count taken from the work actually done; nothing here
+    is estimated, and a caller that cannot measure something simply omits it.
+    """
+    if progress is None:
+        return
+    try:
+        progress(event)
+    except Exception:  # noqa: BLE001
+        # Progress reporting must never break an ingestion.
+        pass
+
 
 class ExtractionError(Exception):
     """Raised with a user-facing message when a document cannot be read."""
@@ -134,8 +152,13 @@ def _ocr_pdf_pages(path: Path, page_numbers: list[int], progress=None) -> dict[i
     results: dict[int, str] = {}
     with pymupdf.open(str(path)) as document:
         for position, page_index in enumerate(page_numbers):
-            if progress:
-                progress(page_index + 1, position + 1, len(page_numbers))
+            _report(
+                progress,
+                stage="ocr",
+                page=page_index + 1,
+                pages=len(page_numbers),
+                ocrPages=position + 1,
+            )
             page = document[page_index]
             pixmap = page.get_pixmap(dpi=OCR_DPI)
             image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
@@ -230,6 +253,10 @@ def _iter_pdf_blocks(path: Path, name: str, progress=None, info: dict | None = N
     ocr_pages = 0
     ocr_document = None
 
+    # The page count is known before any page is read, so the UI can show real
+    # "page N of M" progress for the whole extraction rather than a spinner.
+    _report(progress, stage="extracting", page=0, pages=page_count)
+
     try:
         for index in range(page_count):
             # pypdf caches every object it resolves for the life of the reader,
@@ -262,8 +289,15 @@ def _iter_pdf_blocks(path: Path, name: str, progress=None, info: dict | None = N
                     pytesseract.pytesseract.tesseract_cmd = capabilities.tesseract_path()
                     ocr_document = pymupdf.open(str(path))
 
-                if progress:
-                    progress(index + 1, ocr_pages + 1, page_count)
+                # OCR is the slow path, so every page is reported: a 180-page
+                # scan otherwise looks frozen for several minutes.
+                _report(
+                    progress,
+                    stage="ocr",
+                    page=index + 1,
+                    pages=page_count,
+                    ocrPages=ocr_pages + 1,
+                )
 
                 try:
                     recognised = _ocr_one_page(ocr_document, index)
@@ -280,6 +314,11 @@ def _iter_pdf_blocks(path: Path, name: str, progress=None, info: dict | None = N
 
             if text.strip():
                 yield {"text": text, "metadata": {"page": index + 1}}
+
+            # Text pages are fast, so reporting each one would be noise. One
+            # tick per window is enough to keep the page counter moving.
+            if (index + 1) % PROGRESS_PAGE_INTERVAL == 0 or index + 1 == page_count:
+                _report(progress, stage="extracting", page=index + 1, pages=page_count)
     finally:
         _close_pdf(reader)
         if ocr_document is not None:
@@ -593,8 +632,20 @@ def iter_blocks(file_path: str, display_name: str | None = None, progress=None, 
 
     blocks, block_info = EXTRACTORS[extension](path, name)
     info.update(block_info)
-    for block in blocks:
+
+    # These formats are parsed in one go, so the totals are known immediately.
+    # Reporting them lets the UI say how much there is even though extraction
+    # itself was too fast to show progress for.
+    _report(
+        progress,
+        stage="extracting",
+        blocks=len(blocks),
+        **({"pages": block_info["slideCount"]} if "slideCount" in block_info else {}),
+    )
+
+    for index, block in enumerate(blocks, 1):
         yield block
+        _report(progress, stage="extracting", block=index, blocks=len(blocks))
 
 
 def iter_chunk_batches(

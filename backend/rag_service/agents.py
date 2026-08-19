@@ -199,6 +199,13 @@ web_chat_prompt = ChatPromptTemplate.from_messages([
 Write a clear, well-structured Markdown answer. Lead with the direct answer, then
 supporting detail. Use headings and lists only when they aid readability.
 
+Every figure, date and name must come from the web research below, not from
+memory - the search results are more current than your training data, so where
+they disagree the search results are right. Cite the source for each figure. If
+the research does not contain the answer, say so instead of supplying a
+remembered value. When the research reports a figure as of a particular date,
+give that date alongside it.
+
 """
         + CITATION_RULES,
     ),
@@ -224,10 +231,15 @@ hybrid_chat_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
         """You are an expert AI research assistant with two sources of information:
-the user's documents (primary) and live web research (complementary).
+the user's documents and live web research.
 
-- Lead with what the documents say.
-- Add recent web findings, and call out anything newer than the documents.
+- Lead with whichever source actually answers the question.
+- For anything time-sensitive - prices, box office and other running totals,
+  news, scores, current events - the web research is authoritative. Take those
+  figures from it, never from memory.
+- If the documents are not about the subject of the question, ignore them
+  rather than describing what they do not contain.
+- Add recent web findings and call out anything newer than the documents.
 - If the two disagree, present both viewpoints instead of silently picking one.
 - Never invent facts that neither source supports.
 

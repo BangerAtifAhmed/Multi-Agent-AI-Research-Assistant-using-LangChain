@@ -30,6 +30,7 @@ export async function runChatTurn({
   mode,
   documentId,
   critique = false,
+  webSearch = false,
   signal,
   emit,
 }) {
@@ -81,6 +82,8 @@ export async function runChatTurn({
     hasDocuments: readyDocuments > 0,
     hasAttachment: Boolean(documentId),
     webSearchEnabled: ragHealth?.webSearch !== false,
+    // Honoured only if a provider is actually configured.
+    forceWeb: webSearch === true,
   });
 
   const resolvedMode = queryRouter.routeToPipelineMode(routing.route);
@@ -161,6 +164,11 @@ export async function runChatTurn({
         userId,
         query: searchQuery,
         documentIds: resolvedDocumentId ? [resolvedDocumentId] : null,
+        // In hybrid the question is not necessarily about the documents at all,
+        // so only genuinely relevant chunks may take a citation slot. In
+        // document mode the user did ask about their files, so the nearest
+        // matches are still worth showing.
+        allowWeakMatches: resolvedMode === 'document',
       });
       documentSources = result.sources;
       documentContext = retrievalService.buildContext(documentSources, 1);
@@ -176,6 +184,24 @@ export async function runChatTurn({
       if (research.scraped) {
         webContext += `\n\nFull text of the most relevant page:\n${research.scraped.slice(0, 8000)}`;
       }
+      logger.debug(
+        `web search: "${searchQuery.slice(0, 80)}" -> ${webSources.length} result(s)` +
+          `${research.cached ? ' (cached)' : ''}`,
+      );
+    }
+
+    // The question needs a live figure and the search produced nothing - a
+    // provider outage, or a query nothing matched. Answering from memory here is
+    // how a confident, invented number reaches the user, so the model is told
+    // plainly that it has no current data rather than being left to fill the gap.
+    if (routing.requiresFreshData && !webSources.length) {
+      logger.warn(
+        `no web results for a query that needs current data: "${searchQuery.slice(0, 80)}"`,
+      );
+      webContext +=
+        '\n\nNo current web results could be retrieved for this question. Tell the user ' +
+        'that live information is unavailable right now and that any figure you might ' +
+        'recall could be out of date. Do not state a specific current figure.';
     }
 
     sources = [...documentSources, ...webSources].map((source, index) => ({

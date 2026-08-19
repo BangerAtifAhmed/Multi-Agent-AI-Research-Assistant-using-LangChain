@@ -185,11 +185,47 @@ async function handleProcessingFailure({ userId, document, storageKey, error }) 
       : 'Could not extract readable text from this document.',
     errorCode: (isApiError && error.code) || 'EXTRACTION_FAILED',
     chunkCount: 0,
+    // Stale counters would otherwise keep a failed document looking busy.
+    progress: { stage: 'failed' },
   });
 
   // The original file is kept so the user can see what failed and retry.
   await cacheService.invalidateUserDocumentCaches(userId).catch(() => {});
   return null;
+}
+
+/**
+ * Rate-limits progress writes.
+ *
+ * A 1000-page PDF reports progress about a hundred times; without this each one
+ * would be a database round trip on the ingestion's critical path. Writes are
+ * spaced out, and callers `mark()` when they have just written the row for
+ * another reason so the next tick is measured from that point.
+ */
+function progressWriter(documentId, intervalMs = config.retrieval.progressIntervalMs) {
+  let lastWrite = 0;
+  let inFlight = false;
+
+  return {
+    mark() {
+      lastWrite = Date.now();
+    },
+    async maybeWrite(progress) {
+      if (inFlight || Date.now() - lastWrite < intervalMs) return false;
+      inFlight = true;
+      try {
+        await documentModel.updateProgress(documentId, { ...progress, updatedAt: new Date().toISOString() });
+        lastWrite = Date.now();
+        return true;
+      } catch (error) {
+        // Progress is cosmetic; never let it fail an ingestion.
+        logger.debug(`could not write progress for ${documentId}: ${error.message}`);
+        return false;
+      } finally {
+        inFlight = false;
+      }
+    },
+  };
 }
 
 /** Maps one extracted chunk onto a database row, keeping only real metadata. */
@@ -266,12 +302,19 @@ async function embedAndInsertBatch({ userId, document, batch, offset }) {
 async function processDocument({ userId, document, storageKey }) {
   const filePath = await storageService.getObjectPath(storageKey);
 
-  await documentModel.updateStatus(document.id, 'extracting');
+  await documentModel.updateStatus(document.id, 'extracting', { progress: { stage: 'extracting' } });
 
   let info = {};
   let total = 0;
   let embeddingModel = null;
   let announcedEmbedding = false;
+  let stage = 'extracting';
+
+  // Live counters, all of them measured rather than estimated. Fields stay
+  // absent until the work that produces them has actually happened, so the UI
+  // can tell "nothing to report yet" from "zero".
+  const progress = { stage };
+  const writer = progressWriter(document.id);
 
   for await (const event of ragClient.extractChunksStream(
     filePath,
@@ -280,10 +323,22 @@ async function processDocument({ userId, document, storageKey }) {
   )) {
     if (event.type === 'status') {
       // 'ocr' only appears for scanned pages, so the UI can say so honestly.
-      await documentModel.updateStatus(
-        document.id,
-        event.stage === 'ocr' ? 'ocr' : 'extracting',
-      );
+      const nextStage = event.stage === 'ocr' ? 'ocr' : stage;
+
+      // Carry through whatever the extractor measured for this event.
+      for (const field of ['page', 'pages', 'ocrPages', 'block', 'blocks']) {
+        if (typeof event[field] === 'number') progress[field] = event[field];
+      }
+
+      if (nextStage !== stage) {
+        stage = nextStage;
+        progress.stage = stage;
+        // A stage change is worth a write immediately; the UI labels on it.
+        await documentModel.updateStatus(document.id, stage, { progress });
+        writer.mark();
+      } else {
+        await writer.maybeWrite(progress);
+      }
       continue;
     }
 
@@ -295,8 +350,14 @@ async function processDocument({ userId, document, storageKey }) {
       if (!(await stillExists(userId, document.id))) throw new DocumentRemoved();
 
       if (!announcedEmbedding) {
-        await documentModel.updateStatus(document.id, 'chunking');
-        await documentModel.updateStatus(document.id, 'embedding');
+        // The first batch existing *is* the end of chunking, so both stages are
+        // recorded rather than the intermediate one being skipped.
+        progress.stage = 'chunking';
+        await documentModel.updateStatus(document.id, 'chunking', { progress });
+        stage = 'embedding';
+        progress.stage = stage;
+        await documentModel.updateStatus(document.id, 'embedding', { progress });
+        writer.mark();
         announcedEmbedding = true;
       }
 
@@ -309,14 +370,25 @@ async function processDocument({ userId, document, storageKey }) {
 
       total += result.written;
       embeddingModel = result.embeddingModel;
+      progress.batches = event.index ?? (progress.batches ?? 0) + 1;
+      progress.chunks = total;
 
-      // Keeps the running count visible while a long document is indexed.
-      await documentModel.updateStatus(document.id, 'embedding', { chunkCount: total });
+      // Keeps the running count visible while a long document is indexed. The
+      // chunk count is on the document itself, the batch counters on progress.
+      await documentModel.updateStatus(document.id, 'embedding', {
+        chunkCount: total,
+        progress,
+      });
+      writer.mark();
       continue;
     }
 
     if (event.type === 'result') {
       info = event.info ?? {};
+      // Only now is the total known: extraction and embedding are interleaved,
+      // so until the stream ends there is no honest denominator to show.
+      if (typeof event.batches === 'number') progress.batchesTotal = event.batches;
+      if (typeof event.count === 'number') progress.chunksTotal = event.count;
     }
   }
   if (!total) {
@@ -330,6 +402,17 @@ async function processDocument({ userId, document, storageKey }) {
   const ready = await documentModel.updateStatus(document.id, 'ready', {
     chunkCount: total,
     extractionInfo: { ...info, embeddingModel },
+    // Final counters, so a finished document shows what it actually did rather
+    // than whatever the last mid-flight tick happened to say.
+    progress: {
+      stage: 'ready',
+      chunks: total,
+      chunksTotal: total,
+      batches: progress.batchesTotal ?? progress.batches,
+      batchesTotal: progress.batchesTotal ?? progress.batches,
+      ...(progress.pages ? { page: progress.pages, pages: progress.pages } : {}),
+      ...(info.ocrPages ? { ocrPages: info.ocrPages } : {}),
+    },
   });
 
   await cacheService.invalidateUserDocumentCaches(userId);

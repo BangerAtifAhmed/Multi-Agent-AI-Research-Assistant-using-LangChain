@@ -20,6 +20,10 @@ export async function searchChunks({
   fetchLimit = config.retrieval.fetchK,
   documentIds = null,
   maxDistance = config.retrieval.maxDistance,
+  // Whether below-threshold matches may stand in when nothing is relevant.
+  // True for an explicit question about the user's documents; false when the
+  // router chose this path on the user's behalf.
+  allowWeakMatches = true,
 }) {
   const vector = toVectorLiteral(embedding);
   const params = [vector, userId, Math.max(limit, fetchLimit)];
@@ -60,9 +64,16 @@ export async function searchChunks({
   );
 
   const relevant = rows.filter((row) => Number(row.distance) <= maxDistance);
-  // Never return nothing purely because of the threshold: fall back to the best
-  // matches so the model still gets context to work with.
-  const kept = (relevant.length ? relevant : rows).slice(0, limit);
+
+  // When the user is explicitly asking about their documents, returning the
+  // closest matches even if none clear the threshold is better than returning
+  // nothing - they asked about their files, so show them the nearest thing.
+  //
+  // When the question was routed here automatically it is the opposite: an
+  // unrelated question ("box office collection of a film") would otherwise pick
+  // up whatever happens to be least dissimilar, occupy the citation slots and
+  // steer the answer towards material that has nothing to do with the question.
+  const kept = (relevant.length || !allowWeakMatches ? relevant : rows).slice(0, limit);
 
   return kept.map((row, index) => {
     const metadata = row.metadata ?? {};

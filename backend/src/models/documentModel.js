@@ -19,6 +19,8 @@ const toDocument = (row) =>
     errorMessage: row.error_message ?? null,
     errorCode: row.error_code ?? null,
     extractionInfo: row.extraction_info ?? {},
+    // Live counters while processing; {} once the document is terminal.
+    progress: row.progress ?? {},
     chunkCount: row.chunk_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -80,7 +82,7 @@ export async function getStorageKey(userId, documentId) {
 export async function updateStatus(
   documentId,
   status,
-  { errorMessage = null, errorCode = null, chunkCount, extractionInfo } = {},
+  { errorMessage = null, errorCode = null, chunkCount, extractionInfo, progress } = {},
 ) {
   const { rows } = await query(
     `UPDATE documents
@@ -89,6 +91,7 @@ export async function updateStatus(
          error_code = $4,
          chunk_count = COALESCE($5, chunk_count),
          extraction_info = COALESCE($6::jsonb, extraction_info),
+         progress = COALESCE($7::jsonb, progress),
          updated_at = now()
      WHERE id = $1
      RETURNING *`,
@@ -99,9 +102,23 @@ export async function updateStatus(
       errorCode,
       chunkCount ?? null,
       extractionInfo ? JSON.stringify(extractionInfo) : null,
+      progress ? JSON.stringify(progress) : null,
     ],
   );
   return toDocument(rows[0]);
+}
+
+/**
+ * Writes the live progress counters without touching the status.
+ *
+ * Called often during a long ingestion, so it is deliberately a single narrow
+ * UPDATE: no RETURNING, and nothing else in the row is read or rewritten.
+ */
+export async function updateProgress(documentId, progress) {
+  await query(
+    'UPDATE documents SET progress = $2::jsonb, updated_at = now() WHERE id = $1',
+    [documentId, JSON.stringify(progress ?? {})],
+  );
 }
 
 /** Marks documents left mid-processing by a crash or restart as failed. */
@@ -204,6 +221,7 @@ export default {
   getDocument,
   getStorageKey,
   updateStatus,
+  updateProgress,
   failStaleProcessing,
   insertChunks,
   deleteChunks,

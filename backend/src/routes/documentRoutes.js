@@ -19,6 +19,7 @@ router.post(
   uploadDocument,
   asyncHandler(documentController.upload),
 );
+router.get('/:id', asyncHandler(documentController.get));
 router.delete('/:id', asyncHandler(documentController.remove));
 
 export default router;

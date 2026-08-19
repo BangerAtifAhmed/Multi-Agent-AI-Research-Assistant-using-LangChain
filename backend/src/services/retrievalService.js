@@ -24,14 +24,21 @@ async function embedQueryCached(text) {
   return { ...result, cached: false };
 }
 
-export async function retrieveForUser({ userId, query, documentIds = null, k }) {
+export async function retrieveForUser({
+  userId,
+  query,
+  documentIds = null,
+  k,
+  allowWeakMatches = true,
+}) {
   if (!userId) throw new Error('retrieveForUser requires a userId');
 
   const scope = Array.isArray(documentIds) && documentIds.length ? [...documentIds].sort() : null;
 
   // Cache key contains the user id: one user's retrieval results can never be
   // served to another.
-  const key = cacheKeys.retrieval(userId, query, scope);
+  // The flag changes the result set, so it has to be part of the cache key.
+  const key = cacheKeys.retrieval(userId, query, scope, allowWeakMatches);
   const cached = await cacheService.getCached(key);
   if (cached) return { sources: cached, cached: true };
 
@@ -45,6 +52,7 @@ export async function retrieveForUser({ userId, query, documentIds = null, k }) 
     documentIds: scope,
     limit: k ?? config.retrieval.k,
     fetchLimit: config.retrieval.fetchK,
+    allowWeakMatches,
   });
 
   await cacheService.setCached(key, sources, config.cache.retrievalTtlSeconds);

@@ -171,10 +171,10 @@ async def extract(body: ExtractRequest, x_service_token: str | None = Header(def
         try:
             events.put({"type": "status", "stage": "extracting"})
 
-            def progress(page: int, done: int, total: int) -> None:
-                events.put(
-                    {"type": "status", "stage": "ocr", "page": page, "done": done, "total": total}
-                )
+            def progress(event: dict) -> None:
+                # Forwarded verbatim: every field is a real count measured by
+                # the extractor (pages read, pages OCRed, blocks produced).
+                events.put({"type": "status", **event})
 
             # Chunks are streamed in bounded batches instead of one huge frame,
             # so neither this process nor Express ever holds the whole document.
@@ -182,13 +182,21 @@ async def extract(body: ExtractRequest, x_service_token: str | None = Header(def
             # extraction pauses rather than buffering the rest of the file.
             info: dict = {}
             total = 0
+            frames = 0
             for batch in extraction.iter_chunk_batches(
                 body.path, body.name, body.batchSize, progress, info
             ):
                 total += len(batch)
-                events.put({"type": "chunks", "chunks": batch, "count": len(batch)})
+                frames += 1
+                # `index` is the batch's position in the stream, so Express can
+                # report "batch 8" without counting frames itself.
+                events.put(
+                    {"type": "chunks", "chunks": batch, "count": len(batch), "index": frames}
+                )
 
-            events.put({"type": "result", "count": total, "info": info})
+            events.put(
+                {"type": "result", "count": total, "batches": frames, "info": info}
+            )
         except extraction.ExtractionError as exc:
             events.put({"type": "error", "code": exc.code, "message": str(exc)})
         except Exception as exc:  # noqa: BLE001

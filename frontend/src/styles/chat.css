@@ -268,3 +268,142 @@
 .empty__library-link:hover {
   color: var(--accent);
 }
+
+/* --- ingestion progress ------------------------------------------------- */
+/* Shared by the composer chip and the Library cards. The bar is determinate
+   only when the server reported a real ratio; otherwise it animates without
+   claiming a position. */
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.progress--compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress__label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress--done .progress__label {
+  color: var(--accent);
+}
+
+.progress--error .progress__label {
+  color: var(--danger);
+}
+
+.progress__track {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.progress--compact .progress__track {
+  width: 64px;
+  flex: none;
+}
+
+.progress:not(.progress--compact) .progress__track {
+  width: 100%;
+}
+
+.progress__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+/* No known ratio: a travelling sliver, so nothing implies "43% done". */
+.progress__track--indeterminate .progress__fill {
+  width: 35%;
+  animation: progress-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(320%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress__track--indeterminate .progress__fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+  .progress__fill { transition: none; }
+}
+
+.doc-card__progress {
+  margin-top: 8px;
+  max-width: 320px;
+}
+
+/* --- web search toggle --------------------------------------------------- */
+/* Sits beside the attach button. Its pressed state is the only thing that
+   distinguishes "search the web" from the automatic route. */
+.composer__web {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.composer__web:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.composer__web--on,
+.composer__web--on:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.composer__web:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.composer__web:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The label is a nicety; on a narrow composer the icon carries the meaning. */
+@media (max-width: 560px) {
+  .composer__web-label {
+    display: none;
+  }
+  .composer__web {
+    padding: 0 9px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer__web { transition: none; }
+}

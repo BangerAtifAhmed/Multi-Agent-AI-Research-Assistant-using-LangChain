@@ -134,6 +134,9 @@ export const config = {
     // Chunks carried per streamed extraction frame. Peak ingestion memory is
     // one batch, so lower it on a very small instance.
     ingestBatchSize: int(process.env.INGEST_BATCH_SIZE, 64),
+    // Minimum gap between live progress writes during ingestion. Low enough to
+    // look real-time at a 1.5s poll, high enough not to hammer the database.
+    progressIntervalMs: int(process.env.PROGRESS_INTERVAL_MS, 700),
   },
 
   history: {

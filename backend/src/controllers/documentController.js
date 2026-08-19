@@ -1,10 +1,24 @@
 import config from '../config/index.js';
+import ApiError from '../utils/ApiError.js';
 import documentModel from '../models/documentModel.js';
 import ragClient from '../rag/ragClient.js';
 import ingestService from '../services/ingestService.js';
 
 export async function list(req, res) {
   res.json({ documents: await documentModel.listDocuments(req.user.id) });
+}
+
+/**
+ * One document, for following its processing progress.
+ *
+ * The upload UI polls this rather than the full list: while a document is being
+ * indexed the client wants one row, and sending the whole library every 1.5
+ * seconds is wasteful for a user with many documents.
+ */
+export async function get(req, res) {
+  const document = await documentModel.getDocument(req.user.id, req.params.id);
+  if (!document) throw ApiError.notFound('Document not found.', 'DOCUMENT_NOT_FOUND');
+  res.json({ document });
 }
 
 export async function upload(req, res) {
@@ -43,4 +57,4 @@ export async function formats(req, res) {
   });
 }
 
-export default { list, upload, remove, formats };
+export default { list, get, upload, remove, formats };

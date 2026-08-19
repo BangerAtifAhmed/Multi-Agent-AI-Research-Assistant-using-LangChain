@@ -35,6 +35,8 @@ export default function ChatView({
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState(null);
   const [critique, setCritique] = useState(false);
+  // Sticky, like a mode: once on it stays on until the user turns it off.
+  const [webSearch, setWebSearch] = useState(false);
 
   // The document attached to the *next* message, if any.
   const [attachment, setAttachment] = useState(null);
@@ -157,15 +159,27 @@ export default function ChatView({
   const attachFile = useCallback(
     async (file) => {
       setError(null);
-      setAttachment({ name: file.name, status: 'uploading', documentId: null });
+      setAttachment({
+        name: file.name,
+        status: 'uploading',
+        documentId: null,
+        uploadPercent: 0,
+        document: null,
+      });
 
       const fail = (message) =>
         setAttachment({ name: file.name, status: 'failed', documentId: null, error: message });
 
       let document;
       try {
-        // Phase 1: the upload itself. Bounded by a timeout in documentApi.
-        document = await documentApi.uploadDocument(file);
+        // Phase 1: the upload itself, reporting bytes actually sent.
+        document = await documentApi.uploadDocument(file, (percent) => {
+          setAttachment((current) =>
+            current && current.status === 'uploading'
+              ? { ...current, uploadPercent: percent ?? current.uploadPercent }
+              : current,
+          );
+        });
       } catch (uploadError) {
         fail(uploadError.message);
         return;
@@ -173,8 +187,14 @@ export default function ChatView({
 
       onDocumentsChanged?.();
       // Phase 2: the server processes in the background. Distinct from
-      // "uploading" so the user can tell which stage is slow.
-      setAttachment({ name: document.originalFilename ?? file.name, status: 'processing', documentId: null });
+      // "uploading" so the user can tell which stage is slow. `document` carries
+      // the server's own stage and counters, which the chip renders.
+      setAttachment({
+        name: document.originalFilename ?? file.name,
+        status: 'processing',
+        documentId: null,
+        document,
+      });
 
       const deadline = Date.now() + PROCESSING_BUDGET_MS;
       let current = document;
@@ -182,10 +202,14 @@ export default function ChatView({
 
       while (!TERMINAL.has(current.status)) {
         if (Date.now() > deadline) {
-          fail(
-            'Still processing after several minutes. It will keep going in the background - ' +
-              'check your Library in a moment.',
-          );
+          // Unchanged: stop watching, never stop the server. The chip says so
+          // explicitly instead of looking like a failure.
+          setAttachment({
+            name: document.originalFilename ?? file.name,
+            status: 'backgrounded',
+            documentId: null,
+            document: current,
+          });
           onDocumentsChanged?.();
           return;
         }
@@ -193,15 +217,21 @@ export default function ChatView({
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
 
         try {
-          const list = await documentApi.listDocuments();
+          // One document rather than the whole library: this runs every 1.5s
+          // for as long as processing takes.
+          current = await documentApi.getDocument(document.id);
           consecutiveErrors = 0;
-          const found = list.find((item) => item.id === document.id);
-          if (!found) {
+          // Feed the server's live counters straight to the chip.
+          setAttachment((existing) =>
+            existing && existing.status === 'processing'
+              ? { ...existing, document: current }
+              : existing,
+          );
+        } catch (pollError) {
+          if (pollError?.status === 404) {
             fail('The document is no longer in your library.');
             return;
           }
-          current = found;
-        } catch (pollError) {
           // A restarting server drops a few polls; only give up if it persists.
           consecutiveErrors += 1;
           if (consecutiveErrors >= MAX_POLL_ERRORS) {
@@ -214,7 +244,12 @@ export default function ChatView({
       onDocumentsChanged?.();
 
       if (current.status === 'ready') {
-        setAttachment({ name: current.originalFilename, status: 'ready', documentId: current.id });
+        setAttachment({
+          name: current.originalFilename,
+          status: 'ready',
+          documentId: current.id,
+          document: current,
+        });
       } else {
         // Surface the server's actual reason (e.g. interrupted, unreadable).
         fail(current.errorMessage || 'Could not process this file.');
@@ -257,12 +292,14 @@ export default function ChatView({
         // verifies ownership and decides the route itself.
         documentId: attachment?.status === 'ready' ? attachment.documentId : null,
         critique,
+        // A request, not a route: the server still decides and enforces it.
+        webSearch,
       });
 
       // The attachment applies to the message just sent.
       setAttachment(null);
     },
-    [attachment, critique, isStreaming, start],
+    [attachment, critique, webSearch, isStreaming, start],
   );
 
   const showStreaming = streamConversationRef.current === activeId || (!activeId && stream.active);
@@ -279,6 +316,11 @@ export default function ChatView({
       onOpenLibrary={onOpenLibrary}
       critique={critique}
       onCritiqueChange={setCritique}
+      webSearch={webSearch}
+      onWebSearchChange={setWebSearch}
+      // The health check reports whether a search provider is configured, so
+      // the button is disabled rather than silently doing nothing.
+      webSearchAvailable={health?.rag?.webSearch !== false}
       error={error || externalError}
       onDismissError={() => {
         setError(null);

@@ -42,11 +42,31 @@ const WEB_PATTERNS = [
   /\b(latest|newest|recent|recently|current|currently|today|todays|tonight|yesterday|this (week|month|year)|right now|as of now|up to date|up-to-date)\b/i,
   /\b(news|headlines|announcement|released?|launch(ed)?|update[ds]?)\b/i,
   /\b(price|stock|share price|exchange rate|weather|forecast|score|standings|election|who won)\b/i,
+  // Figures that change constantly and are never reliable from training data.
+  // A model asked for a box-office total will happily invent one, so these must
+  // reach a search even when the sentence has no "latest"/"current" wording.
+  /\b(box[- ]?office|collections?|gross(ed|ing)?|earnings|revenue|takings|ticket sales)\b/i,
+  /\b(opening (day|weekend|night)|first (day|weekend)|footfalls?)\b/i,
+  /\b(worldwide|domestic|overseas|lifetime)\s+(gross|collection|total|earnings|box[- ]?office)\b/i,
   /\b(in|since|during)\s+20(2[4-9]|[3-9]\d)\b/,
   /\b(state of the art|sota)\b/i,
   /\bwhat('s| is) (happening|new|going on)\b/i,
   /\b(search|google|look ?up)\s+(the\s+)?(web|online|internet)\b/i,
 ];
+
+/**
+ * Facts that are worthless unless they are current. When one of these appears,
+ * a search is required rather than merely preferred: answering from training
+ * data would produce a confident, wrong number.
+ */
+const REQUIRES_FRESH_DATA = [
+  /\b(box[- ]?office|collections?|gross(ed|ing)?|earnings|revenue|ticket sales)\b/i,
+  /\b(latest|current|currently|today|todays|recent|recently|right now|as of now)\b/i,
+  /\b(news|headlines|price|stock|share price|exchange rate|weather|forecast|score|standings)\b/i,
+];
+
+/** True when the message asks for something that must come from a live source. */
+export const needsFreshData = (message) => countMatches(REQUIRES_FRESH_DATA, message || '') > 0;
 
 /** Asks to relate the user's material to the outside world. */
 const HYBRID_PATTERNS = [
@@ -155,6 +175,7 @@ async function classifyWithLlm(message) {
  * @param {boolean} options.hasAttachment     a document was attached to this turn
  * @param {boolean} options.webSearchEnabled  a search provider is configured
  * @param {boolean} options.allowLlmFallback  permit the extra classification call
+ * @param {boolean} options.forceWeb          the user asked for a web search explicitly
  * @returns {Promise<{route: string, confidence: number, reason: string}>}
  */
 export async function routeQuery({
@@ -163,7 +184,19 @@ export async function routeQuery({
   hasAttachment = false,
   webSearchEnabled = true,
   allowLlmFallback = true,
+  forceWeb = false,
 }) {
+  // The user turned the web-search toggle on for this message. It is a request,
+  // not a route: the server still refuses if no provider is configured, and
+  // still pairs it with the documents when one is attached to this turn.
+  if (forceWeb && webSearchEnabled) {
+    return {
+      route: hasAttachment ? ROUTES.HYBRID : ROUTES.WEB,
+      confidence: 1,
+      reason: 'the user asked for a web search',
+      requiresFreshData: true,
+    };
+  }
   // A file attached to this very message is an unambiguous instruction to use
   // it, so no classification is needed unless the user also asks for fresh
   // information.
@@ -187,7 +220,22 @@ export async function routeQuery({
       : { route: ROUTES.LLM, confidence: 0.5, reason: 'no retrieval signal detected' };
   }
 
-  return applyAvailability(decision, { hasDocuments, webSearchEnabled });
+  // Safety net over every path above, including the LLM classifier: a question
+  // about a figure that changes daily is never answered from memory while a
+  // search provider is available.
+  if (webSearchEnabled && needsFreshData(message)
+      && decision.route !== ROUTES.WEB && decision.route !== ROUTES.HYBRID) {
+    decision = {
+      route: decision.route === ROUTES.DOCUMENTS && hasDocuments ? ROUTES.HYBRID : ROUTES.WEB,
+      confidence: Math.max(decision.confidence, 0.9),
+      reason: `${decision.reason}; overridden - needs current information`,
+    };
+  }
+
+  const routed = applyAvailability(decision, { hasDocuments, webSearchEnabled });
+  // The caller needs to know when an answer *must* be grounded in a live
+  // source, so it can refuse to present training-data numbers as fact.
+  return { ...routed, requiresFreshData: needsFreshData(message) };
 }
 
 /** Downgrades a route the deployment cannot actually serve. */
@@ -228,4 +276,11 @@ export function routeToPipelineMode(route) {
   }
 }
 
-export default { routeQuery, classifyDeterministic, applyAvailability, routeToPipelineMode, ROUTES };
+export default {
+  routeQuery,
+  classifyDeterministic,
+  applyAvailability,
+  routeToPipelineMode,
+  needsFreshData,
+  ROUTES,
+};

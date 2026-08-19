@@ -1,5 +1,6 @@
 import { memo, useState } from 'react';
 
+import ProcessingProgress from './ProcessingProgress.jsx';
 import { formatDateTime } from '../utils/date.js';
 
 const formatSize = (bytes) => {
@@ -83,6 +84,14 @@ function DocumentCard({ document, onDelete }) {
           )}
           {status.busy && status.hint && <span className="doc-card__hint">{status.hint}</span>}
         </div>
+
+        {/* Live counters while the pipeline is still working on this document.
+            The Library already polls, so this costs no extra requests. */}
+        {status.busy && (
+          <div className="doc-card__progress">
+            <ProcessingProgress document={document} />
+          </div>
+        )}
 
         {document.status === 'failed' && document.errorMessage && (
           <p className="doc-card__error">{document.errorMessage}</p>

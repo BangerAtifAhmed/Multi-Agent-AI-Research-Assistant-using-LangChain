@@ -19,8 +19,10 @@ export const cacheKeys = {
   embedding: (text) => `cache:embed:${hash(text)}`,
 
   /** Private: scoped to the owner and the exact document set searched. */
-  retrieval: (userId, query, documentIds) =>
-    `cache:retrieval:${userId}:${hash(`${query}::${(documentIds ?? []).join(',')}`)}`,
+  retrieval: (userId, query, documentIds, allowWeakMatches = true) =>
+    `cache:retrieval:${userId}:${hash(
+      `${query}::${(documentIds ?? []).join(',')}::weak=${allowWeakMatches ? 1 : 0}`,
+    )}`,
 
   /** Public: web search results are not derived from any user's data. */
   webResearch: (query) => `cache:web:${hash(query.toLowerCase().trim())}`,

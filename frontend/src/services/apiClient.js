@@ -137,6 +137,73 @@ export async function request(path, { method = 'GET', body, signal, headers, tim
   }
 }
 
+/**
+ * Upload that reports how many bytes have actually been sent.
+ *
+ * `fetch` gives no visibility into request upload progress, so this one call
+ * uses XMLHttpRequest. The percentage comes from the browser's own count of
+ * bytes on the wire - it is a real measurement, not a timer.
+ */
+export function uploadRequest(path, { body, onProgress, timeoutMs, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE_URL}${path}`);
+    xhr.withCredentials = true;
+    if (timeoutMs) xhr.timeout = timeoutMs;
+
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (event) => {
+        // Not every browser/proxy reports a total; without one there is no
+        // honest percentage, so the caller is told so explicitly.
+        onProgress(event.lengthComputable ? (event.loaded / event.total) * 100 : null);
+      });
+    }
+
+    const fail = (message, code, status) =>
+      reject(new ApiRequestError(message, { code, status }));
+
+    xhr.addEventListener('load', () => {
+      let payload = null;
+      try {
+        payload = JSON.parse(xhr.responseText);
+      } catch {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          fail('The server returned an unexpected response. It may be restarting - please try again.',
+            'INVALID_RESPONSE', xhr.status);
+          return;
+        }
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload);
+        return;
+      }
+      const error = new ApiRequestError(
+        payload?.error?.message ?? `Request failed with status ${xhr.status}.`,
+        { status: xhr.status, code: payload?.error?.code, retryAfter: payload?.error?.retryAfter },
+      );
+      // Same session-expiry signal the fetch path emits, so the app reacts
+      // identically whichever transport was used.
+      if (xhr.status === 401) {
+        for (const listener of unauthorizedListeners) listener(error);
+      }
+      reject(error);
+    });
+
+    xhr.addEventListener('error', () => fail(NETWORK_MESSAGE, 'NETWORK_ERROR'));
+    xhr.addEventListener('timeout', () =>
+      fail('The upload took too long. The server may be busy - please try again.', 'TIMEOUT'));
+    xhr.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+
+    if (signal) {
+      if (signal.aborted) { xhr.abort(); return; }
+      signal.addEventListener('abort', () => xhr.abort(), { once: true });
+    }
+
+    xhr.send(body);
+  });
+}
+
 /** POST that returns a raw streaming response (used for SSE). */
 export async function streamRequest(path, { body, signal } = {}) {
   let response;
@@ -161,4 +228,11 @@ export async function streamRequest(path, { body, signal } = {}) {
   return response;
 }
 
-export default { request, streamRequest, API_BASE_URL, ApiRequestError, onUnauthorized };
+export default {
+  request,
+  streamRequest,
+  uploadRequest,
+  API_BASE_URL,
+  ApiRequestError,
+  onUnauthorized,
+};
