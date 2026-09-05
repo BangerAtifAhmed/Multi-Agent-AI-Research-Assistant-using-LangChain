@@ -1053,11 +1053,46 @@ a.source-card:hover {
   color: var(--text-faint);
 }
 
+.composer__footer {
+  margin-top: 8px;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px 14px;
+  flex-wrap: wrap;
+}
+
 .composer__hint {
-  margin: 8px 0 0;
+  margin: 0;
   text-align: center;
   font-size: 11px;
   color: var(--text-faint);
+}
+
+/* The day's chat allowance. Every figure in it comes from the server. */
+.quota {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.quota__count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Out of chats: stated plainly rather than shouted, since the banner above
+   already carries the server's message when a send is refused. */
+.quota--spent .quota__count {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.quota__reset {
+  opacity: 0.75;
 }
 
 .scroll-down {

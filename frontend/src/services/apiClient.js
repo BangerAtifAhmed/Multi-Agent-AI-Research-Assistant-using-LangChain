@@ -28,19 +28,25 @@ export function normaliseApiBaseUrl(value) {
   return `${raw}/api`;
 }
 
+// Optional chaining so this module also imports outside Vite (the tests run it
+// on plain Node, where import.meta.env does not exist).
 export const API_BASE_URL = normaliseApiBaseUrl(
-  import.meta.env.VITE_API_URL ||
-    import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env?.VITE_API_URL ||
+    import.meta.env?.VITE_API_BASE_URL ||
     'http://localhost:3000/api',
 );
 
 export class ApiRequestError extends Error {
-  constructor(message, { status, code, retryAfter } = {}) {
+  constructor(message, { status, code, retryAfter, meta } = {}) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = status;
     this.code = code;
     this.retryAfter = retryAfter;
+    // Structured, server-supplied data that goes with the error - the quota
+    // figures behind a 429, for instance. Always the server's numbers, never
+    // anything this client worked out for itself.
+    this.meta = meta;
   }
 
   get isAuthError() {
@@ -64,11 +70,13 @@ export const onUnauthorized = (listener) => {
 async function parseError(response) {
   let message = `Request failed (${response.status})`;
   let code;
+  let meta;
   try {
     const body = await response.json();
     if (body?.error?.message) {
       message = body.error.message;
       code = body.error.code;
+      meta = body.error.meta;
     }
   } catch {
     /* non-JSON error body */
@@ -77,6 +85,7 @@ async function parseError(response) {
   const error = new ApiRequestError(message, {
     status: response.status,
     code,
+    meta,
     retryAfter: Number(response.headers.get('Retry-After')) || undefined,
   });
 

@@ -30,6 +30,7 @@ function ChatWindow({
   onOpenSidebar,
   disabled,
   loadingMessages,
+  quota,
 }) {
   const { containerRef, pinnedToBottom, handleScroll, scrollToBottom } = useAutoScroll([
     messages.length,
@@ -104,6 +105,7 @@ function ChatWindow({
           attachment={attachment}
           isStreaming={isStreaming}
           disabled={disabled}
+          quota={quota}
           placeholder="Ask anything…"
         />
       </div>

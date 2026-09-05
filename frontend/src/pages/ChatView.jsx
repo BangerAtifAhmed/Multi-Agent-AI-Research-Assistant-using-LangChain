@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import ChatWindow from '../components/ChatWindow.jsx';
 import useChatStream from '../hooks/useChatStream.js';
+import chatApi from '../services/chatApi.js';
 import conversationApi from '../services/conversationApi.js';
 import documentApi from '../services/documentApi.js';
 
@@ -41,6 +42,12 @@ export default function ChatView({
   // The document attached to the *next* message, if any.
   const [attachment, setAttachment] = useState(null);
 
+  // The day's chat allowance, exactly as the server last reported it. Read once
+  // on mount, then replaced by the `quota` frame every accepted turn sends and
+  // by the figures a 429 carries. Never incremented here: the backend is the
+  // only thing that counts chats, so there is nothing to drift out of step.
+  const [quota, setQuota] = useState(null);
+
   const streamConversationRef = useRef(null);
   const activeIdRef = useRef(null);
   activeIdRef.current = activeId;
@@ -73,11 +80,19 @@ export default function ChatView({
       error: streamError,
       conversation,
       removedConversationId,
+      accepted,
     }) => {
       const conversationId = streamConversationRef.current;
       streamConversationRef.current = null;
 
       if (streamError) setError(streamError);
+
+      // The server never took this turn - the daily limit refused it, or the
+      // request never landed - so nothing was saved. Drop the optimistic bubble
+      // rather than leaving a question on screen that was never asked.
+      if (!accepted) {
+        setMessages((prev) => prev.filter((message) => !message.id.startsWith('temp-')));
+      }
 
       if (removedConversationId) {
         conversationsRemoveLocal(removedConversationId);
@@ -115,8 +130,28 @@ export default function ChatView({
 
   const { stream, start, stop, reset, isStreaming } = useChatStream({
     onMeta: handleMeta,
+    // Whatever the server says the allowance now is, that is what we show.
+    onQuota: setQuota,
     onComplete: handleComplete,
   });
+
+  // The starting value. Everything after this arrives on the chat stream, so
+  // this runs once and is never polled.
+  useEffect(() => {
+    let cancelled = false;
+    chatApi
+      .getChatLimit()
+      .then((current) => {
+        if (!cancelled) setQuota(current);
+      })
+      .catch(() => {
+        // The indicator is not worth an error banner: it simply does not
+        // appear, and the first answer fills it in.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load the messages of whichever conversation is open.
   useEffect(() => {
@@ -331,6 +366,7 @@ export default function ChatView({
       onOpenSidebar={onOpenSidebar}
       disabled={health?.rag?.state === 'failed'}
       loadingMessages={loadingMessages}
+      quota={quota}
     />
   );
 }

@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import ChatQuota from './ChatQuota.jsx';
 import ProcessingProgress from './ProcessingProgress.jsx';
 
 const MAX_LENGTH = 8000;
@@ -20,6 +21,10 @@ function ChatInput({
   webSearchAvailable = true,
   isStreaming,
   disabled,
+  // The server's daily-chat figures, or null when it has none to report. Shown
+  // only - the send button is never gated on it, because the backend is what
+  // decides whether a chat is allowed and it decides on every request.
+  quota = null,
   placeholder = 'Ask anything…',
 }) {
   const [value, setValue] = useState('');
@@ -213,9 +218,13 @@ function ChatInput({
         </div>
       </form>
 
-      <p className="composer__hint">
-        Enter to send · Shift+Enter for a new line · answers are grounded in the sources shown
-      </p>
+      <div className="composer__footer">
+        <p className="composer__hint">
+          10 chats/day · Free API usage is limited, so this helps keep the service available for
+          everyone.
+        </p>
+        <ChatQuota quota={quota} />
+      </div>
     </div>
   );
 }
