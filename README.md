@@ -100,7 +100,7 @@ User asks a question
 - Redis-backed rate limiting and caching that fails open
 - Conversation history, full-text search (pg_trgm), pin/favorite
 - Docker multi-stage build; deployed on Render with Neon and Upstash
-- 270 automated tests
+- 447 automated tests
 
 ---
 
@@ -596,8 +596,17 @@ Tesseract 5.3.0.
 **Cache** — Upstash Redis over the HTTPS REST API (chosen because outbound port 6379 is often
 blocked), with an ioredis TCP fallback.
 
-**External APIs** — Mistral (generation), Hugging Face Inference (embeddings), Tavily
-(search).
+**External APIs** — Mistral (generation), Hugging Face Inference (embeddings, and Llama 3.1
+8B Instruct as the generation failover), Tavily (search).
+
+**LLM failover** — Mistral answers every request. When a call to it fails for a reason
+Mistral owns — connection error, timeout, rate limit, 5xx, rejected key — `llm_provider.py`
+replays the *same* rendered prompt against `meta-llama/Llama-3.1-8B-Instruct` on the Hugging
+Face Inference API and serves the answer from there, logging which model produced it. A
+successful Mistral call is never rerouted, an error caused by the service's own code is
+re-raised rather than retried, and a failure that happens after tokens are already streaming
+is reported rather than restarted (restarting would repeat text in the browser). Set
+`LLM_FALLBACK_ENABLED=false`, or leave the Hugging Face token unset, to disable it.
 
 **Configuration** — entirely environment-driven; `assertRequiredConfig()` fails fast on
 missing essentials and enforces a minimum session-secret length in production.
@@ -614,7 +623,7 @@ killed.
 
 ## 15. Testing
 
-270 automated tests, all currently passing. Reproduce with the commands in §19.
+447 automated tests, all currently passing. Reproduce with the commands in §19.
 
 ### Reliable suites
 
@@ -623,12 +632,13 @@ killed.
 | Extraction | `rag_service/tests/test_extraction.py` | **54** | All seven formats, metadata, failure modes, capability reporting |
 | Per-format streaming | `rag_service/tests/test_streaming_formats.py` | **58** | Batched output identical to eager output for every format; batch size never changes results |
 | Embeddings | `rag_service/tests/test_embeddings.py` | **22** | Provider selection, dimension guard, retries, credential-leak checks |
+| LLM fallback | `rag_service/tests/test_llm_fallback.py` | **177** | Mistral success, HTTP 429 / timeout / 5xx failover to Llama 3.1 on Hugging Face driven through `rag_engine`, both-fail behaviour, transport errors, prompt fidelity |
 | Progress reporting | `rag_service/tests/test_progress.py` | **31** | Page/OCR/block counters, throttling, callback failures never break ingestion |
 | Large-document memory | `rag_service/tests/test_large_document.py` | **15** | Streaming vs eager peak memory, byte-identical output, tuning knobs |
 | Scalability | `rag_service/tests/test_scalability.py` | **16** | 280 / 560 / 1,000 pages; memory must not track page count |
 | Query routing | `backend/src/services/queryRouter.test.js` | **38** | Route selection, fresh-data override, availability degradation, web toggle |
 | Frontend | `frontend/src/lib/uploadProgress.test.js`, `frontend/src/components/ProcessingProgress.test.jsx` | **36** | Progress derivation (28) + rendered markup and ARIA (8) |
-| **Total** | | **270** | |
+| **Total** | | **447** | |
 
 ### Container verification
 
@@ -648,7 +658,7 @@ Four validation assertions in the full-format HTTP E2E script accept `429 RATE_L
 pass. Once that script exhausts its hourly upload budget those four cases self-certify without
 testing anything. They were re-run separately on a cleared budget and do genuinely return
 `DANGEROUS_FILE`, `EMPTY_FILE`, `PARSE_FAILED` and `NO_TEXT_EXTRACTED` — but **the assertions
-themselves remain weak and should be tightened.** They are excluded from the 270 count above.
+themselves remain weak and should be tightened.** They are excluded from the 447 count above.
 
 ---
 
@@ -703,7 +713,7 @@ Invariant enforced by tests: **no chunk may belong to a document that is not `re
 │   │   ├── vector_store.py           legacy CLI index
 │   │   ├── settings.py
 │   │   ├── requirements.txt
-│   │   └── tests/                    6 Python suites + fixture generator
+│   │   └── tests/                    7 Python suites + fixture generator
 │   └── src/
 │       ├── app.js  server.js
 │       ├── config/                   index.js · database.js · redis.js
@@ -740,7 +750,7 @@ Invariant enforced by tests: **no chunk may belong to a document that is not `re
 | **Frontend** | React 19, Vite 7, react-markdown, remark-gfm, rehype-highlight, SSE via Fetch streams, XHR upload progress, plain CSS |
 | **Backend** | Node.js 24, Express 5, multer, cookie-parser, cors, dotenv |
 | **RAG service** | Python 3.12, FastAPI, Uvicorn, Pydantic, NDJSON streaming |
-| **AI / LLM** | Mistral `mistral-small-2506` via `langchain-mistralai`; LangChain LCEL chains; `create_agent` tool-calling agents (CLI pipeline) |
+| **AI / LLM** | Mistral `mistral-small-2506` via `langchain-mistralai`, with `meta-llama/Llama-3.1-8B-Instruct` on the Hugging Face Inference API as an automatic failover; LangChain LCEL chains; `create_agent` tool-calling agents (CLI pipeline) |
 | **RAG** | `langchain-text-splitters` (RecursiveCharacterTextSplitter 1000/100) |
 | **Embeddings** | `sentence-transformers/all-mpnet-base-v2`, 768-dim; Hugging Face Inference API or local |
 | **Vector database** | PostgreSQL + pgvector — HNSW, `vector_cosine_ops`, `<=>` |
@@ -807,6 +817,7 @@ cd backend/rag_service
 python tests/test_extraction.py
 python tests/test_streaming_formats.py
 python tests/test_embeddings.py
+python tests/test_llm_fallback.py                       # no network, no credentials
 python tests/test_progress.py
 python tests/test_large_document.py                      # generates large fixtures
 python tests/test_scalability.py                         # 280 / 560 / 1000 pages
@@ -861,6 +872,12 @@ USE_LOCAL_EMBEDDINGS=
 MISTRAL_MODEL=
 LLM_TEMPERATURE=
 LLM_MAX_TOKENS=
+LLM_FALLBACK_ENABLED=
+LLM_FALLBACK_MODEL=
+LLM_FALLBACK_API_URL=
+HF_LLM_API_TOKEN=
+LLM_FALLBACK_TIMEOUT=
+LLM_FALLBACK_MAX_RETRIES=
 TAVILY_API_KEY=
 CHUNK_SIZE=
 CHUNK_OVERLAP=
@@ -1069,7 +1086,7 @@ React 19 · Express 5 · FastAPI · PostgreSQL/pgvector · Redis · LangChain ·
   and multi-tenant isolation enforced *inside* PostgreSQL/pgvector HNSW cosine search.
 
 - **Built** seven-format ingestion (PDF/DOC/DOCX/PPT/PPTX/TXT/MD) with per-page Tesseract OCR
-  fallback and headless LibreOffice conversion, validated by **270 automated tests** producing
+  fallback and headless LibreOffice conversion, validated by **447 automated tests** producing
   byte-identical output on Windows and inside a 469 MB Debian container.
 
 ---

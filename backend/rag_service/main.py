@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 import capabilities
 import embeddings as embedding_providers
 import extraction
+import llm_provider
 import rag_engine
 import settings
 import vector_store
@@ -98,6 +99,9 @@ def health() -> dict:
     return {
         "status": "ok",
         "model": settings.MISTRAL_MODEL,
+        # Whether a failed Mistral call has somewhere to fail over to. Model and
+        # endpoint only - the token is never included.
+        "llmFallback": llm_provider.describe(),
         "embedding": _embedding_status(),
         "embeddingsLoaded": vector_store._embeddings is not None,
         "webSearch": bool(settings.TAVILY_API_KEY),

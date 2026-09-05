@@ -4,22 +4,22 @@ from rich import print
 from pprint import pprint
 from tools import web_search, scrape_url
 from langchain.agents import create_agent
-from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-import settings
+from llm_provider import build_llm
 
 warnings.filterwarnings("ignore")
 
-# Model configuration
-llm = ChatMistralAI(
-    model_name=settings.MISTRAL_MODEL,
-    api_key=settings.MISTRAL_API_KEY,
-    temperature=settings.LLM_TEMPERATURE,
-    max_tokens=settings.LLM_MAX_TOKENS,
-    streaming=True,
-)
+# Model configuration.
+#
+# Mistral is still the model that answers: build_llm() returns the same
+# ChatMistralAI as before, wrapped so that a Mistral call which fails for a
+# provider-side reason (timeout, rate limit, 5xx, rejected key) is replayed
+# once against meta-llama/Llama-3.1-8B-Instruct on the Hugging Face Inference
+# API. A successful Mistral call is never rerouted, and every chain below is
+# unchanged. See llm_provider.py.
+llm = build_llm()
 
 # 1st Agent for web search
 def build_search_agent():

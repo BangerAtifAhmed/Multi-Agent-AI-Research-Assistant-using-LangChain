@@ -109,6 +109,25 @@ MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-2506")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 LLM_MAX_TOKENS = _env_int("LLM_MAX_TOKENS", 2000)
 
+# --- Fallback LLM (Hugging Face) ---------------------------------------------
+# Mistral above stays the primary model. These only take effect when a Mistral
+# call fails for a provider-side reason; see llm_provider.py. Turning the
+# fallback off restores the exact pre-fallback behaviour.
+LLM_FALLBACK_ENABLED = _env_bool("LLM_FALLBACK_ENABLED", True)
+LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
+LLM_FALLBACK_API_URL = os.getenv(
+    "LLM_FALLBACK_API_URL", "https://router.huggingface.co/v1/chat/completions"
+)
+# Credentials come from the environment only; nothing is hard-coded. A separate
+# HF_LLM_API_TOKEN is honoured so the fallback can use its own token, but by
+# default it reuses the Hugging Face token this deployment already has.
+LLM_FALLBACK_API_TOKEN = os.getenv("HF_LLM_API_TOKEN") or os.getenv(
+    "HUGGINGFACEHUB_API_TOKEN", ""
+)
+LLM_FALLBACK_TIMEOUT = _env_int("LLM_FALLBACK_TIMEOUT", 60)
+# Retries within the fallback itself, for a rate limit or a cold model.
+LLM_FALLBACK_MAX_RETRIES = _env_int("LLM_FALLBACK_MAX_RETRIES", 2)
+
 # --- Retrieval / chunking ---------------------------------------------------
 CHUNK_SIZE = _env_int("CHUNK_SIZE", 1000)
 CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 100)

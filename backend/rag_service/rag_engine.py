@@ -174,10 +174,20 @@ def generate(
 
         if critique and answer.strip():
             yield {"type": "status", "stage": "critiquing", "label": "Reviewing the answer"}
-            for event in _stream_chain(
-                crictic_chain, {"report": answer}, cancel, event_type="critique_token"
-            ):
-                yield event
+            try:
+                for event in _stream_chain(
+                    crictic_chain, {"report": answer}, cancel, event_type="critique_token"
+                ):
+                    yield event
+            except Cancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the answer is already delivered
+                # The answer streamed successfully; only the optional review
+                # failed (and its own Hugging Face fallback failed too, or this
+                # would not have raised). Turning a delivered answer into a
+                # "rate limited" error would be wrong, so the review is dropped
+                # and the turn still finishes normally.
+                print(f"[generate] critique skipped: {str(exc)[:200]}")
 
         yield {"type": "done", "finishReason": "stop"}
 
