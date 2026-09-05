@@ -4,6 +4,9 @@
  * stack traces, API keys and database details never reach the client.
  *
  * `details` is for the server log only and is never serialised to a response.
+ * `meta` is the opposite: structured, already-safe data the client needs in
+ * order to react to the error, such as the quota figures behind a 429. Only put
+ * values there that you would be happy to see in a browser's network tab.
  */
 export class ApiError extends Error {
   constructor(status, message, code = undefined, details = undefined) {
@@ -12,7 +15,14 @@ export class ApiError extends Error {
     this.status = status;
     this.code = code;
     this.details = details;
+    this.meta = undefined;
     this.expose = true;
+  }
+
+  /** Attaches client-safe structured data to this error. Chainable. */
+  withMeta(meta) {
+    this.meta = meta;
+    return this;
   }
 
   static badRequest(message, code = 'BAD_REQUEST', details) {

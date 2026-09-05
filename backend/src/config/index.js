@@ -104,6 +104,20 @@ export const config = {
     api: { points: int(process.env.RATE_LIMIT_API, 300), windowSeconds: 60 },
   },
 
+  // --- Daily chat quota ------------------------------------------------------
+  // A per-user allowance rather than a burst limit: one counter per calendar
+  // day, keyed by the authenticated user id, reset by key expiry at midnight.
+  chatDailyLimit: {
+    max: int(process.env.CHAT_DAILY_LIMIT, 10),
+    // The zone that decides when "tomorrow" starts. UTC by default so the
+    // boundary is the same everywhere the service runs; set an IANA zone
+    // (e.g. Asia/Kolkata) to reset at local midnight instead.
+    timeZone: str(process.env.CHAT_DAILY_LIMIT_TIMEZONE, 'UTC'),
+    // Matches REDIS_OPTIONAL: a Redis outage must not take chat offline. Set
+    // false to refuse chats instead of serving them uncounted.
+    failOpen: bool(process.env.CHAT_DAILY_LIMIT_FAIL_OPEN, true),
+  },
+
   cache: {
     retrievalTtlSeconds: int(process.env.CACHE_RETRIEVAL_TTL, 300),
     embeddingTtlSeconds: int(process.env.CACHE_EMBEDDING_TTL, 3600),
@@ -120,6 +134,11 @@ export const config = {
     serviceDir: path.join(BACKEND_DIR, 'rag_service'),
     token: str(process.env.RAG_SERVICE_TOKEN),
     startupTimeoutMs: int(process.env.RAG_SERVICE_STARTUP_TIMEOUT, 180_000),
+    // Longest gap allowed between frames on the generation stream. The RAG
+    // service sends a heartbeat every few seconds while it is working - a
+    // slow model or a fallback retry keeps arriving - so silence for this
+    // long means the service is wedged, not busy.
+    streamIdleTimeoutMs: int(process.env.RAG_STREAM_IDLE_TIMEOUT, 90_000),
   },
 
   // --- Retrieval -----------------------------------------------------------
@@ -178,6 +197,12 @@ export const config = {
   limits: {
     maxMessageLength: int(process.env.MAX_MESSAGE_LENGTH, 8000),
     maxTitleLength: 60,
+    // Hard ceiling on one chat turn, after which the SSE response is closed
+    // with an error however stuck the pipeline is. Generous on purpose: it is
+    // a backstop for a turn that will never finish, not a quality-of-service
+    // timeout, and it has to outlast a rate-limited Mistral call retrying and
+    // then failing over to Hugging Face.
+    chatTurnTimeoutMs: int(process.env.CHAT_TURN_TIMEOUT, 600_000),
   },
 };
 

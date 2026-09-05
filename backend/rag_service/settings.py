@@ -128,6 +128,13 @@ LLM_FALLBACK_TIMEOUT = _env_int("LLM_FALLBACK_TIMEOUT", 60)
 # Retries within the fallback itself, for a rate limit or a cold model.
 LLM_FALLBACK_MAX_RETRIES = _env_int("LLM_FALLBACK_MAX_RETRIES", 2)
 
+# Longest one /generate/stream request may run before the stream is closed with
+# a timeout, however stuck the pipeline is. Sized to outlast a rate-limited
+# Mistral call retrying and then failing over to Hugging Face (Mistral's own
+# retries, then LLM_FALLBACK_MAX_RETRIES attempts of LLM_FALLBACK_TIMEOUT each)
+# and still stream a long answer afterwards.
+GENERATE_BUDGET_SECONDS = _env_int("GENERATE_BUDGET_SECONDS", 540)
+
 # --- Retrieval / chunking ---------------------------------------------------
 CHUNK_SIZE = _env_int("CHUNK_SIZE", 1000)
 CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 100)

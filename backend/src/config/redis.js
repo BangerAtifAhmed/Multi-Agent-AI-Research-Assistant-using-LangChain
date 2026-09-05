@@ -74,6 +74,8 @@ function createRestDriver({ url, token }) {
       ]);
       return { count: Number(count), ttl: Number(ttl) };
     },
+    /** Atomic decrement, for releasing a counter slot that was never used. */
+    decr: async (key) => Number(await send(['DECR', prefixed(key)])),
     scanKeys: async (pattern) => {
       const found = [];
       let cursor = '0';
@@ -146,6 +148,7 @@ async function createTcpDriver(rawUrl) {
       const [count, , ttl] = results.map(([, value]) => value);
       return { count: Number(count), ttl: Number(ttl) };
     },
+    decr: async (key) => Number(await redis.decr(key)),
     scanKeys: async (pattern) => {
       const found = [];
       let cursor = '0';

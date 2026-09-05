@@ -33,6 +33,10 @@ export async function runChatTurn({
   webSearch = false,
   signal,
   emit,
+  // Called once, when validation and ownership checks have passed and the
+  // pipeline is about to run. Everything that throws before this point is a
+  // request that never started processing, so it must not spend a daily chat.
+  onAccepted,
 }) {
   if (!userId) throw ApiError.unauthorized();
 
@@ -70,6 +74,12 @@ export async function runChatTurn({
       );
     }
   }
+
+  // The request is legitimate and the work is about to begin: from here on it
+  // counts against the user's daily allowance, however it ends. A failure after
+  // this point - including Mistral failing over to Hugging Face - is still this
+  // one chat, because it is still this one turn.
+  onAccepted?.();
 
   // --- automatic routing ---------------------------------------------------
   // The client never chooses the retrieval strategy. Any `mode` it sends is
@@ -257,6 +267,11 @@ export async function runChatTurn({
           break;
         case 'done':
           finishReason = event.finishReason || 'stop';
+          break;
+        case 'heartbeat':
+          // Proof the RAG service is still working, not a pipeline event. It
+          // exists so the stall watchdog can tell "slow" from "wedged"; there
+          // is nothing to forward to the browser.
           break;
         default:
           logger.debug(`unhandled RAG event: ${event.type}`);

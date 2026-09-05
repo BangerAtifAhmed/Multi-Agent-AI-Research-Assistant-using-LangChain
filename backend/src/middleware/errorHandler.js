@@ -25,6 +25,9 @@ export function errorHandler(error, req, res, next) {
   if (error instanceof ApiError) {
     status = error.status;
     payload = { message: error.message, code: error.code || 'ERROR' };
+    // Structured data the client needs to react (e.g. the quota behind a 429).
+    // `details` stays out of the response; only `meta` is ever serialised.
+    if (error.meta !== undefined) payload.meta = error.meta;
   } else if (error instanceof multer.MulterError) {
     status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
     payload = {

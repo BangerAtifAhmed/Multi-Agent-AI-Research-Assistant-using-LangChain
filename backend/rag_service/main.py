@@ -41,6 +41,19 @@ app = FastAPI(title="RAG Service", version="2.0.0", docs_url=None, redoc_url=Non
 SERVICE_TOKEN = os.getenv("RAG_SERVICE_TOKEN") or None
 _QUEUE_SENTINEL = object()
 
+#: How long generation may go without producing an event before a heartbeat
+#: frame is sent. Express uses the gap between frames to tell a slow model from
+#: a wedged one, so silence has to mean something is actually wrong - a Mistral
+#: call retrying and then failing over to Hugging Face can legitimately take
+#: minutes before the first token.
+GENERATE_HEARTBEAT_SECONDS = 5.0
+
+#: Hard ceiling on one generation. A worker thread blocked on a socket that
+#: never returns cannot be killed, but the response must still end: past this
+#: the stream reports a timeout and closes, and the abandoned thread is left to
+#: unwind on its own.
+GENERATE_BUDGET_SECONDS = settings.GENERATE_BUDGET_SECONDS
+
 
 def _authorize(token: str | None) -> None:
     if SERVICE_TOKEN and token != SERVICE_TOKEN:
@@ -289,8 +302,24 @@ async def generate_stream(
     cancel = threading.Event()
     events: queue.Queue = queue.Queue(maxsize=512)
 
+    def publish(event) -> bool:
+        """Hand one event to the stream, giving up if the client has gone.
+
+        A plain `put` blocks once the queue is full, which would strand the
+        worker - and the terminating sentinel with it - whenever the consumer
+        stopped reading. Nothing is worth waiting for after `cancel` is set.
+        """
+        while not cancel.is_set():
+            try:
+                events.put(event, timeout=0.5)
+                return True
+            except queue.Full:
+                continue
+        return False
+
     def worker() -> None:
         """Run the (synchronous) LangChain pipeline off the event loop."""
+        finished = False
         try:
             for event in rag_engine.generate(
                 query=query,
@@ -303,9 +332,12 @@ async def generate_stream(
             ):
                 if cancel.is_set():
                     break
-                events.put(event)
+                if event.get("type") == "done":
+                    finished = True
+                if not publish(event):
+                    return
         except Exception as exc:  # noqa: BLE001
-            events.put(
+            publish(
                 {
                     "type": "error",
                     "code": exc.__class__.__name__,
@@ -313,17 +345,58 @@ async def generate_stream(
                 }
             )
         finally:
-            events.put(_QUEUE_SENTINEL)
+            # `done` is the frame Express turns into the browser's terminal
+            # event, so it is guaranteed here even when generation ended by
+            # raising or by being cancelled.
+            if not finished and not cancel.is_set():
+                publish({"type": "done", "finishReason": "error"})
+            publish(_QUEUE_SENTINEL)
 
     async def stream():
         loop = asyncio.get_running_loop()
         thread = threading.Thread(target=worker, name="rag-worker", daemon=True)
         thread.start()
+        deadline = loop.time() + GENERATE_BUDGET_SECONDS
+
+        def next_event():
+            """Blocking get with a heartbeat tick, run off the event loop."""
+            try:
+                return events.get(timeout=GENERATE_HEARTBEAT_SECONDS)
+            except queue.Empty:
+                return None
+
         try:
             while True:
-                event = await loop.run_in_executor(None, events.get)
+                event = await loop.run_in_executor(None, next_event)
+
                 if event is _QUEUE_SENTINEL:
                     break
+
+                if loop.time() >= deadline:
+                    print(
+                        f"[generate] exceeded {GENERATE_BUDGET_SECONDS}s budget; "
+                        f"closing the stream",
+                        flush=True,
+                    )
+                    cancel.set()
+                    yield json.dumps(
+                        {
+                            "type": "error",
+                            "code": "LLM_TIMEOUT",
+                            "message": "The language model took too long to respond. "
+                            "Please try again.",
+                        }
+                    ) + "\n"
+                    yield json.dumps({"type": "done", "finishReason": "error"}) + "\n"
+                    break
+
+                if event is None:
+                    # Still working. The heartbeat both keeps intermediaries
+                    # from closing an idle connection and tells Express the
+                    # difference between a slow model and a wedged service.
+                    yield json.dumps({"type": "heartbeat"}) + "\n"
+                    continue
+
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         except (asyncio.CancelledError, GeneratorExit):
             # The client (Express) went away - stop generating immediately.

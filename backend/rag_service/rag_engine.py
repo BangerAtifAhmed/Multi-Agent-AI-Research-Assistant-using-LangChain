@@ -227,3 +227,8 @@ def generate(
             )
 
         yield {"type": "error", "code": code, "message": message}
+        # Every exit from this generator ends with `done`, this one included.
+        # Express turns the end of this stream into the end of the browser's SSE
+        # stream, and a turn that stops without saying it is over leaves the
+        # composer generating with no way for the user to send anything else.
+        yield {"type": "done", "finishReason": "error"}

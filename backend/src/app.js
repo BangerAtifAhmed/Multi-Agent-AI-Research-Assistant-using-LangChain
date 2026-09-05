@@ -26,6 +26,14 @@ app.use(
       callback(new Error('CORS_NOT_ALLOWED'));
     },
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    // Without this the browser hides these from the client, so the UI could not
+    // show how many chats are left in the day.
+    exposedHeaders: [
+      'X-Chat-Limit-Limit',
+      'X-Chat-Limit-Remaining',
+      'X-Chat-Limit-Reset',
+      'Retry-After',
+    ],
     // Required for the session cookie to travel cross-origin in development.
     credentials: true,
   }),

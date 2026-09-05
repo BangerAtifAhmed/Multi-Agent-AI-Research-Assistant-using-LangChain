@@ -216,66 +216,115 @@ export async function health() {
 /**
  * Streams generated tokens. `signal` aborts the upstream request, which makes
  * the Python side cancel generation instead of finishing the answer unseen.
+ *
+ * A stalled RAG service used to hang the whole turn: this read had no deadline,
+ * so Express waited forever, the browser's SSE stream never closed, and the
+ * composer stayed stuck on "Stop". The service heartbeats while it works, so a
+ * gap longer than `idleTimeoutMs` is reported as a failure rather than waited
+ * out. Only the gap between frames is bounded - a legitimately slow answer, or
+ * a Mistral call failing over to Hugging Face, keeps the stream alive.
  */
-export async function* streamGeneration(payload, signal) {
+export async function* streamGeneration(payload, signal, { idleTimeoutMs } = {}) {
   await ensureRagService();
 
-  let response;
-  try {
-    response = await fetch(`${config.rag.url}/generate/stream`, {
-      method: 'POST',
-      headers: serviceHeaders(),
-      body: JSON.stringify(payload),
-      signal,
-    });
-  } catch (error) {
-    if (error?.name === 'AbortError') return;
-    throw unavailable(error);
-  }
+  const idleMs = idleTimeoutMs ?? config.rag.streamIdleTimeoutMs;
 
-  if (!response.ok || !response.body) {
-    const detail = await response.text().catch(() => '');
-    logger.error(`RAG stream failed (${response.status}): ${detail.slice(0, 400)}`);
-    throw ApiError.internal('The assistant could not start generating.', 'RAG_STREAM_FAILED');
-  }
+  // Combined so the caller's abort and the stall watchdog end the same request.
+  const request = new AbortController();
+  const forwardAbort = () => request.abort();
+  if (signal?.aborted) request.abort();
+  else signal?.addEventListener('abort', forwardAbort, { once: true });
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  let stalled = false;
+  let idleTimer = null;
+  const watchForStall = () => {
+    if (!idleMs) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      stalled = true;
+      request.abort();
+    }, idleMs);
+  };
+  const stopWatching = () => clearTimeout(idleTimer);
 
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    let response;
+    try {
+      watchForStall();
+      response = await fetch(`${config.rag.url}/generate/stream`, {
+        method: 'POST',
+        headers: serviceHeaders(),
+        body: JSON.stringify(payload),
+        signal: request.signal,
+      });
+    } catch (error) {
+      if (stalled) {
+        logger.error(`RAG service did not respond within ${idleMs}ms`);
+        throw ApiError.serviceUnavailable(
+          'The assistant stopped responding. Please try again.',
+          'RAG_STREAM_STALLED',
+        );
+      }
+      if (error?.name === 'AbortError') return;
+      throw unavailable(error);
+    }
 
-      buffer += decoder.decode(value, { stream: true });
+    if (!response.ok || !response.body) {
+      const detail = await response.text().catch(() => '');
+      logger.error(`RAG stream failed (${response.status}): ${detail.slice(0, 400)}`);
+      throw ApiError.internal('The assistant could not start generating.', 'RAG_STREAM_FAILED');
+    }
 
-      let newlineIndex;
-      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, newlineIndex).trim();
-        buffer = buffer.slice(newlineIndex + 1);
-        if (!line) continue;
-        try {
-          yield JSON.parse(line);
-        } catch {
-          logger.warn(`skipping malformed RAG event: ${line.slice(0, 200)}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Any bytes prove the service is alive, heartbeat frames included.
+        watchForStall();
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex;
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+          if (!line) continue;
+          try {
+            yield JSON.parse(line);
+          } catch {
+            logger.warn(`skipping malformed RAG event: ${line.slice(0, 200)}`);
+          }
         }
       }
-    }
 
-    const tail = buffer.trim();
-    if (tail) {
-      try {
-        yield JSON.parse(tail);
-      } catch {
-        /* ignore a truncated trailing frame */
+      const tail = buffer.trim();
+      if (tail) {
+        try {
+          yield JSON.parse(tail);
+        } catch {
+          /* ignore a truncated trailing frame */
+        }
       }
+    } catch (error) {
+      if (stalled) {
+        logger.error(`RAG stream went silent for ${idleMs}ms; giving up on this turn`);
+        throw ApiError.serviceUnavailable(
+          'The assistant stopped responding. Please try again.',
+          'RAG_STREAM_STALLED',
+        );
+      }
+      if (error?.name === 'AbortError') return;
+      throw error;
+    } finally {
+      reader.cancel().catch(() => {});
     }
-  } catch (error) {
-    if (error?.name === 'AbortError') return;
-    throw error;
   } finally {
-    reader.cancel().catch(() => {});
+    stopWatching();
+    signal?.removeEventListener('abort', forwardAbort);
   }
 }
 
