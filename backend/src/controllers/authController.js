@@ -12,7 +12,7 @@ async function establishSession(req, res, user) {
     userAgent: req.headers['user-agent'],
     ip: req.ip,
   });
-  res.cookie(config.auth.cookieName, session.token, authService.cookieOptions(session.expiresAt));
+  authService.setSessionCookie(res, session.token, session.expiresAt);
   return session;
 }
 
@@ -32,7 +32,7 @@ export async function login(req, res) {
 
 export async function logout(req, res) {
   if (req.sessionId) await sessionModel.destroySession(req.sessionId);
-  res.clearCookie(config.auth.cookieName, { path: '/', domain: config.auth.cookieDomain });
+  authService.clearSessionCookie(res);
   res.json({ success: true });
 }
 

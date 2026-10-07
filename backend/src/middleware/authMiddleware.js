@@ -1,5 +1,6 @@
 import config from '../config/index.js';
 import sessionModel from '../models/sessionModel.js';
+import { clearSessionCookie } from '../services/authService.js';
 import ApiError from '../utils/ApiError.js';
 
 /**
@@ -40,7 +41,7 @@ export async function requireAuth(req, res, next) {
       const session = await loadSession(req);
       if (!session) {
         // Clear a stale cookie so the browser stops sending it.
-        res.clearCookie(config.auth.cookieName, { path: '/' });
+        clearSessionCookie(res);
         throw ApiError.unauthorized('You must be signed in to do that.', 'NOT_AUTHENTICATED');
       }
       req.user = session.user;

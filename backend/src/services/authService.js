@@ -143,10 +143,41 @@ export function cookieOptions(expiresAt) {
     httpOnly: true,
     secure: config.auth.cookieSecure,
     sameSite: config.auth.cookieSameSite,
+    // Lets the cookie survive in browsers that block third-party cookies: it is
+    // stored per top-level site instead of being dropped.
+    partitioned:
+      config.auth.cookiePartitioned &&
+      config.auth.cookieSecure &&
+      String(config.auth.cookieSameSite).toLowerCase() === 'none',
     domain: config.auth.cookieDomain,
     path: '/',
     expires: expiresAt,
   };
+}
+
+/**
+ * Sets the session cookie. A partitioned cookie and an unpartitioned one of
+ * the same name are separate cookies, so one left by an earlier release is
+ * expired first; otherwise the browser would keep sending the stale one too.
+ */
+export function setSessionCookie(res, token, expiresAt) {
+  const options = cookieOptions(expiresAt);
+  if (options.partitioned) {
+    res.clearCookie(config.auth.cookieName, { ...options, partitioned: false });
+  }
+  res.cookie(config.auth.cookieName, token, options);
+}
+
+/**
+ * Expires the session cookie. The attributes have to match the ones it was set
+ * with, or a browser ignores the request on a cross-site response.
+ */
+export function clearSessionCookie(res) {
+  const options = cookieOptions();
+  res.clearCookie(config.auth.cookieName, options);
+  if (options.partitioned) {
+    res.clearCookie(config.auth.cookieName, { ...options, partitioned: false });
+  }
 }
 
 export default {
@@ -155,5 +186,7 @@ export default {
   findOrCreateGoogleUser,
   createUserSession,
   cookieOptions,
+  setSessionCookie,
+  clearSessionCookie,
   validateSignupInput,
 };

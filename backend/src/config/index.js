@@ -37,6 +37,20 @@ const resolveFrom = (base, value, fallback) => {
 const isProduction = str(process.env.NODE_ENV, 'development') === 'production';
 const frontendUrl = str(process.env.FRONTEND_URL, 'http://localhost:5173');
 
+/**
+ * Whether the session cookie has to survive being set from another site.
+ *
+ * The frontend and this API are normally deployed as two services on different
+ * sites, and a browser only keeps a cookie set from another site if it is
+ * SameSite=None; Secure. An HTTPS frontend counts as a deployment whatever
+ * NODE_ENV says: with NODE_ENV left at "development" on the host, sign-in
+ * would otherwise answer 200 and set a Lax cookie that every browser drops.
+ */
+export const needsCrossSiteCookie = ({ production, frontend }) =>
+  Boolean(production) || /^https:\/\//i.test(String(frontend ?? '').trim());
+
+const crossSiteCookie = needsCrossSiteCookie({ production: isProduction, frontend: frontendUrl });
+
 const corsOrigins = str(process.env.CORS_ORIGIN, `${frontendUrl},http://127.0.0.1:5173`)
   .split(',')
   .map((origin) => origin.trim().replace(/\/+$/, ''))
@@ -76,9 +90,12 @@ export const config = {
     cookieName: str(process.env.SESSION_COOKIE_NAME, 'rag_session'),
     sessionTtlDays: int(process.env.SESSION_TTL_DAYS, 30),
     bcryptRounds: int(process.env.BCRYPT_ROUNDS, 12),
-    // Cross-site in dev (5173 -> 3000) needs SameSite=None+Secure in production.
-    cookieSameSite: str(process.env.COOKIE_SAMESITE, isProduction ? 'none' : 'lax'),
-    cookieSecure: bool(process.env.COOKIE_SECURE, isProduction),
+    // Defaults follow the deployment (see needsCrossSiteCookie); local
+    // development on http://localhost keeps a plain Lax cookie.
+    cookieSameSite: str(process.env.COOKIE_SAMESITE, crossSiteCookie ? 'none' : 'lax'),
+    cookieSecure: bool(process.env.COOKIE_SECURE, crossSiteCookie),
+    // Only meaningful (and only valid) on a cross-site, Secure cookie.
+    cookiePartitioned: bool(process.env.COOKIE_PARTITIONED, crossSiteCookie),
     cookieDomain: str(process.env.COOKIE_DOMAIN) || undefined,
   },
 
