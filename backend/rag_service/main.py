@@ -55,6 +55,19 @@ GENERATE_HEARTBEAT_SECONDS = 5.0
 GENERATE_BUDGET_SECONDS = settings.GENERATE_BUDGET_SECONDS
 
 
+@app.exception_handler(embedding_providers.EmbeddingError)
+async def embedding_error_handler(_request, exc: embedding_providers.EmbeddingError):
+    """Report an embedding failure as a response instead of an unhandled crash.
+
+    The detail goes to the log; only `message` is safe for Express to pass on.
+    """
+    print(f"[embeddings] {exc.code}: {exc}", flush=True)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Embedding failed", "code": exc.code, "message": exc.user_message},
+    )
+
+
 def _authorize(token: str | None) -> None:
     if SERVICE_TOKEN and token != SERVICE_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid service token")
@@ -145,6 +158,8 @@ def embed(body: EmbedRequest, x_service_token: str | None = Header(default=None)
             vectors = [provider.embed_query(texts[0])]
         else:
             vectors = provider.embed_documents(texts)
+    except embedding_providers.EmbeddingError:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Embedding failed: {exc}") from exc
 

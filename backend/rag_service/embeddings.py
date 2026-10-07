@@ -29,7 +29,40 @@ import settings
 
 
 class EmbeddingError(RuntimeError):
-    """Raised when embeddings cannot be produced or are misconfigured."""
+    """Raised when embeddings cannot be produced or are misconfigured.
+
+    `str(exc)` is the full detail for the server log. `user_message` is the
+    only text that may be shown to a user, and `code` lets the caller tell a
+    billing or credentials problem from a transient outage.
+    """
+
+    def __init__(self, message: str, *, code: str = "EMBEDDING_FAILED",
+                 user_message: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.user_message = user_message or (
+            "Document search is temporarily unavailable. Please try again in a moment."
+        )
+
+
+#: Provider responses that will not go away on a retry, and what to tell the user.
+_API_FAILURES = {
+    402: (
+        "EMBEDDING_QUOTA_EXCEEDED",
+        "Document search is unavailable because the embedding provider's credits "
+        "have run out. Please contact the site administrator.",
+    ),
+    401: (
+        "EMBEDDING_AUTH_FAILED",
+        "Document search is unavailable because the embedding provider rejected "
+        "the server's credentials. Please contact the site administrator.",
+    ),
+    403: (
+        "EMBEDDING_AUTH_FAILED",
+        "Document search is unavailable because the embedding provider rejected "
+        "the server's credentials. Please contact the site administrator.",
+    ),
+}
 
 
 class EmbeddingProvider(ABC):
@@ -203,11 +236,19 @@ class ApiEmbeddingProvider(EmbeddingProvider):
                 continue
 
             # The body can echo the request; never surface it to a user.
+            code, user_message = _API_FAILURES.get(
+                response.status_code, ("EMBEDDING_FAILED", None)
+            )
             raise EmbeddingError(
-                f"Embedding API returned HTTP {response.status_code}: {response.text[:180]}"
+                f"Embedding API returned HTTP {response.status_code}: {response.text[:180]}",
+                code=code,
+                user_message=user_message,
             )
 
-        raise EmbeddingError(f"Embedding API unavailable after retries ({last_error})")
+        raise EmbeddingError(
+            f"Embedding API unavailable after retries ({last_error})",
+            code="EMBEDDING_UNAVAILABLE",
+        )
 
     # -- interface ----------------------------------------------------------
 

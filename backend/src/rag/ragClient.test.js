@@ -23,6 +23,8 @@ process.env.RAG_SERVICE_AUTOSTART = 'false';
 let server;
 /** Set per test: writes the NDJSON body for /generate/stream. */
 let respond = null;
+/** Set per test: the status and JSON body /embed answers with. */
+let embedReply = null;
 
 const port = await new Promise((resolve) => {
   server = http.createServer(async (req, res) => {
@@ -34,6 +36,11 @@ const port = await new Promise((resolve) => {
     if (req.url === '/generate/stream') {
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
       await respond(res);
+      return;
+    }
+    if (req.url === '/embed') {
+      res.writeHead(embedReply.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(embedReply.body));
       return;
     }
     res.writeHead(404).end();
@@ -56,6 +63,37 @@ async function collect(iterator) {
 before(() => {});
 after(async () => {
   await new Promise((resolve) => server.close(resolve));
+});
+
+describe('embedQuery', () => {
+  it('passes on the message the service wrote for an embedding failure', async () => {
+    embedReply = {
+      status: 503,
+      body: {
+        detail: 'Embedding failed',
+        code: 'EMBEDDING_QUOTA_EXCEEDED',
+        message: 'Document search is unavailable because the credits have run out.',
+      },
+    };
+
+    await assert.rejects(ragClient.embedQuery('q'), (error) => {
+      assert.equal(error.name, 'ApiError');
+      assert.equal(error.status, 503);
+      assert.equal(error.code, 'EMBEDDING_QUOTA_EXCEEDED');
+      assert.equal(error.message, embedReply.body.message);
+      return true;
+    });
+  });
+
+  it('keeps any other service failure generic', async () => {
+    embedReply = { status: 500, body: { detail: 'Embedding failed: secret-looking detail' } };
+
+    await assert.rejects(ragClient.embedQuery('q'), (error) => {
+      assert.equal(error.code, 'RAG_ERROR');
+      assert.equal(error.message, 'The document pipeline failed.');
+      return true;
+    });
+  });
 });
 
 describe('streamGeneration', () => {

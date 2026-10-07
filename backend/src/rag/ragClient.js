@@ -21,6 +21,14 @@ const unavailable = (error) => {
   );
 };
 
+const parseJson = (text) => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
 async function requestJson(path, { method = 'POST', body, timeoutMs = 120_000 } = {}) {
   await ensureRagService();
 
@@ -43,6 +51,13 @@ async function requestJson(path, { method = 'POST', body, timeoutMs = 120_000 } 
     if (response.status === 404) throw ApiError.notFound('The file could not be read.');
     if (response.status === 415) {
       throw ApiError.unsupportedMediaType('That file type is not supported.');
+    }
+
+    // Embedding failures arrive with a message written for the user (out of
+    // credits, bad credentials), so it is passed on rather than made generic.
+    const failure = parseJson(detail);
+    if (typeof failure?.code === 'string' && failure.code.startsWith('EMBEDDING_') && failure.message) {
+      throw ApiError.serviceUnavailable(String(failure.message), failure.code);
     }
     throw ApiError.internal('The document pipeline failed.', 'RAG_ERROR');
   }
