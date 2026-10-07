@@ -18,11 +18,14 @@ const USERINFO_ENDPOINT = 'https://openidconnect.googleapis.com/v1/userinfo';
 
 const SCOPES = ['openid', 'email', 'profile'];
 const STATE_TTL_SECONDS = 600;
+// A login ticket only has to survive one redirect and one request.
+const TICKET_TTL_SECONDS = 60;
 
 // Fallback store for when Redis is unavailable, so local development still works.
 const memoryStates = new Map();
 
 const stateKey = (state) => `oauth:state:${state}`;
+const ticketKey = (ticket) => `oauth:ticket:${ticket}`;
 
 export function assertGoogleConfigured() {
   if (!config.google.enabled) {
@@ -33,15 +36,12 @@ export function assertGoogleConfigured() {
   }
 }
 
-async function storeState(state, payload) {
+async function storeState(key, payload, ttlSeconds = STATE_TTL_SECONDS) {
   const serialized = JSON.stringify(payload);
-  const stored = await withRedis(
-    (redis) => redis.set(stateKey(state), serialized, STATE_TTL_SECONDS),
-    null,
-  );
+  const stored = await withRedis((redis) => redis.set(key, serialized, ttlSeconds), null);
 
   if (!stored) {
-    memoryStates.set(state, { payload, expiresAt: Date.now() + STATE_TTL_SECONDS * 1000 });
+    memoryStates.set(key, { payload, expiresAt: Date.now() + ttlSeconds * 1000 });
     // Keep the fallback map from growing without bound.
     for (const [key, value] of memoryStates) {
       if (value.expiresAt < Date.now()) memoryStates.delete(key);
@@ -49,14 +49,12 @@ async function storeState(state, payload) {
   }
 }
 
-/** Consumes the state token: a replayed callback finds nothing and is rejected. */
-async function consumeState(state) {
-  if (!state) return null;
-
+/** Consumes the token: a replayed callback finds nothing and is rejected. */
+async function consumeState(key) {
   if (isRedisReady()) {
     const raw = await withRedis(async (redis) => {
-      const value = await redis.get(stateKey(state));
-      if (value) await redis.del(stateKey(state));
+      const value = await redis.get(key);
+      if (value) await redis.del(key);
       return value;
     });
     if (raw) {
@@ -68,8 +66,8 @@ async function consumeState(state) {
     }
   }
 
-  const entry = memoryStates.get(state);
-  memoryStates.delete(state);
+  const entry = memoryStates.get(key);
+  memoryStates.delete(key);
   if (!entry || entry.expiresAt < Date.now()) return null;
   return entry.payload;
 }
@@ -81,7 +79,7 @@ export async function createAuthorizationUrl({ redirectTo } = {}) {
   const state = randomBytes(32).toString('base64url');
   const nonce = createHash('sha256').update(randomBytes(32)).digest('base64url');
 
-  await storeState(state, { nonce, redirectTo: redirectTo || null, createdAt: Date.now() });
+  await storeState(stateKey(state), { nonce, redirectTo: redirectTo || null, createdAt: Date.now() });
 
   const params = new URLSearchParams({
     client_id: config.google.clientId,
@@ -148,7 +146,8 @@ async function fetchProfile(accessToken) {
 export async function handleCallback({ code, state }) {
   assertGoogleConfigured();
 
-  const stored = await consumeState(state);
+  const stored =
+    typeof state === 'string' && state ? await consumeState(stateKey(state)) : null;
   if (!stored) {
     throw ApiError.badRequest(
       'This sign-in link is no longer valid. Please try again.',
@@ -175,4 +174,31 @@ export async function handleCallback({ code, state }) {
   };
 }
 
-export default { createAuthorizationUrl, handleCallback, assertGoogleConfigured };
+/**
+ * Issues a single-use ticket the frontend trades for its session cookie.
+ *
+ * The callback runs on the API's origin, so a cookie set there is not visible
+ * to a frontend on another site in browsers that partition cookies. Handing
+ * over a ticket lets the cookie be set on a request the frontend itself makes,
+ * exactly as email/password login does.
+ */
+export async function createLoginTicket(userId) {
+  const ticket = randomBytes(32).toString('base64url');
+  await storeState(ticketKey(ticket), { userId }, TICKET_TTL_SECONDS);
+  return ticket;
+}
+
+/** Returns the user id behind a ticket, or null if it is unknown, used or expired. */
+export async function consumeLoginTicket(ticket) {
+  if (typeof ticket !== 'string' || !ticket) return null;
+  const stored = await consumeState(ticketKey(ticket));
+  return stored?.userId ?? null;
+}
+
+export default {
+  createAuthorizationUrl,
+  handleCallback,
+  assertGoogleConfigured,
+  createLoginTicket,
+  consumeLoginTicket,
+};

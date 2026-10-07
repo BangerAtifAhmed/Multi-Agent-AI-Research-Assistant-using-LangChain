@@ -5,6 +5,36 @@ import { onUnauthorized } from '../services/apiClient.js';
 
 const AuthContext = createContext(null);
 
+/** Reads the ticket the Google callback left in the URL fragment, and removes it. */
+function takeOAuthTicket() {
+  if (typeof window === 'undefined') return null;
+  const ticket = new URLSearchParams(window.location.hash.slice(1)).get('oauth_ticket');
+  if (ticket) {
+    window.history.replaceState({}, '', window.location.pathname + window.location.search);
+  }
+  return ticket;
+}
+
+// Shared so a double-invoked effect (StrictMode) cannot spend the ticket twice.
+let initialSession = null;
+
+function loadInitialSession() {
+  initialSession ??= (async () => {
+    const ticket = takeOAuthTicket();
+    if (ticket) {
+      try {
+        return await authApi.googleExchange(ticket);
+      } catch (error) {
+        // LoginPage reads ?error= when it mounts.
+        const code = encodeURIComponent(error?.code || 'google_failed');
+        window.history.replaceState({}, '', `${window.location.pathname}?error=${code}`);
+      }
+    }
+    return authApi.me();
+  })();
+  return initialSession;
+}
+
 /**
  * Session state for the whole app.
  *
@@ -31,14 +61,16 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    refresh();
+    loadInitialSession()
+      .then(setUser, () => setUser(null))
+      .finally(() => setLoading(false));
     authApi
       .authConfig()
       .then((data) => setGoogleEnabled(data.google !== false))
       .catch(() => {
         /* keep the button: the backend may just be starting up */
       });
-  }, [refresh]);
+  }, []);
 
   // An expired or revoked session anywhere in the app drops us back to login.
   useEffect(() => onUnauthorized(() => setUser(null)), []);

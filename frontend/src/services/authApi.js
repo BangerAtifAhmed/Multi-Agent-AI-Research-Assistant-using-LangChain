@@ -30,6 +30,14 @@ export const logoutEverywhere = () => request('/user/logout-all', { method: 'POS
 export const googleLoginUrl = (redirectTo = '/') =>
   `${API_BASE_URL}/auth/google?redirectTo=${encodeURIComponent(redirectTo)}`;
 
+/**
+ * Trades the single-use ticket from the Google callback for a session cookie.
+ * The cookie has to be set on a request this page makes: one set during the
+ * redirect belongs to the API's site and partitioned browsers hide it from us.
+ */
+export const googleExchange = (ticket) =>
+  request('/auth/google/exchange', { method: 'POST', body: { ticket } }).then((data) => data.user);
+
 export default {
   signup,
   login,
@@ -40,4 +48,5 @@ export default {
   updateProfile,
   logoutEverywhere,
   googleLoginUrl,
+  googleExchange,
 };

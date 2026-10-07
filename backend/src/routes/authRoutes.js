@@ -17,5 +17,10 @@ router.get('/me', requireAuth, asyncHandler(authController.me));
 
 router.get('/google', rateLimit({ name: 'oauth', by: 'ip' }), asyncHandler(authController.googleStart));
 router.get('/google/callback', asyncHandler(authController.googleCallback));
+router.post(
+  '/google/exchange',
+  rateLimit({ name: 'oauth', by: 'ip' }),
+  asyncHandler(authController.googleExchange),
+);
 
 export default router;

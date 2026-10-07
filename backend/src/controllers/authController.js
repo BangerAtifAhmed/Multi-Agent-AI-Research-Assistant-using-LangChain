@@ -53,7 +53,8 @@ export async function googleStart(req, res) {
 
 /**
  * Step 2: Google redirects back here. Verify state, exchange the code, then
- * find-or-create the user and hand the browser back to the frontend.
+ * find-or-create the user and hand the browser back to the frontend with a
+ * single-use ticket. No cookie is set here: see createLoginTicket.
  */
 export async function googleCallback(req, res) {
   // Always the site root: the frontend is a single page with no /login route,
@@ -73,17 +74,18 @@ export async function googleCallback(req, res) {
     });
 
     const { user, created, linked } = await authService.findOrCreateGoogleUser(profile);
-    await establishSession(req, res, user);
+    const ticket = await googleOAuth.createLoginTicket(user.id);
 
     if (created) logger.info(`new user via Google: ${user.id}`);
     if (linked) logger.info(`linked Google identity to existing user: ${user.id}`);
 
     const target = new URL(redirectTo || '/', config.frontendUrl);
     // Only ever redirect back to our own frontend.
-    if (target.origin !== new URL(config.frontendUrl).origin) {
-      return res.redirect(config.frontendUrl);
-    }
-    return res.redirect(target.toString());
+    const destination =
+      target.origin === new URL(config.frontendUrl).origin ? target : new URL(config.frontendUrl);
+    // In the fragment so the ticket never reaches a server log or a Referer.
+    destination.hash = `oauth_ticket=${ticket}`;
+    return res.redirect(destination.toString());
   } catch (error) {
     if (error instanceof ApiError) {
       logger.warn(`google oauth failed: ${error.code} ${error.details?.detail ?? ''}`);
@@ -94,9 +96,35 @@ export async function googleCallback(req, res) {
   }
 }
 
+/** Step 3: the frontend trades the ticket for its session cookie. */
+export async function googleExchange(req, res) {
+  const userId = await googleOAuth.consumeLoginTicket(req.body?.ticket);
+  if (!userId) {
+    throw ApiError.badRequest(
+      'This sign-in link is no longer valid. Please try again.',
+      'INVALID_OAUTH_STATE',
+    );
+  }
+
+  const user = await userModel.findById(userId);
+  if (!user) throw ApiError.unauthorized();
+
+  await establishSession(req, res, user);
+  res.json({ user: toPublicUser(user) });
+}
+
 /** Lets the frontend show or hide the "Continue with Google" button. */
 export function authConfig(req, res) {
   res.json({ google: config.google.enabled });
 }
 
-export default { signup, login, logout, me, googleStart, googleCallback, authConfig };
+export default {
+  signup,
+  login,
+  logout,
+  me,
+  googleStart,
+  googleCallback,
+  googleExchange,
+  authConfig,
+};
