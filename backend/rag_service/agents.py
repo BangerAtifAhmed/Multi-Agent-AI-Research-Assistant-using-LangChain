@@ -11,14 +11,7 @@ from llm_provider import build_llm
 
 warnings.filterwarnings("ignore")
 
-# Model configuration.
-#
-# Mistral is still the model that answers: build_llm() returns the same
-# ChatMistralAI as before, wrapped so that a Mistral call which fails for a
-# provider-side reason (timeout, rate limit, 5xx, rejected key) is replayed
-# once against meta-llama/Llama-3.1-8B-Instruct on the Hugging Face Inference
-# API. A successful Mistral call is never rerouted, and every chain below is
-# unchanged. See llm_provider.py.
+
 llm = build_llm()
 
 # 1st Agent for web search

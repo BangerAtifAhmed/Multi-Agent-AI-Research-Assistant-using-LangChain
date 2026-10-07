@@ -98,9 +98,10 @@ User asks a question
 
 **Platform**
 - Redis-backed rate limiting and caching that fails open
+- Ten chats per user per calendar day, counted server-side in Redis
 - Conversation history, full-text search (pg_trgm), pin/favorite
 - Docker multi-stage build; deployed on Render with Neon and Upstash
-- 447 automated tests
+- 490 automated tests
 
 ---
 
@@ -518,7 +519,7 @@ requires an authenticated session.
 | `GET` | `/api/auth/me` | The signed-in user |
 | `GET` | `/api/auth/google` | Begin the Google OAuth flow |
 | `GET` | `/api/auth/google/callback` | OAuth callback — consumes the single-use state |
-| `POST` | `/api/chat` | Send a message; streams the answer as SSE |
+| `POST` | `/api/chat` | Send a message; streams the answer as SSE. `429` once the day's ten chats are used |
 | `GET` | `/api/conversations` | List conversations |
 | `POST` | `/api/conversations` | Create a conversation |
 | `GET` | `/api/conversations/search` | Full-text search across the user's conversations |
@@ -623,7 +624,7 @@ killed.
 
 ## 15. Testing
 
-447 automated tests, all currently passing. Reproduce with the commands in §19.
+490 automated tests, all currently passing. Reproduce with the commands in §19.
 
 ### Reliable suites
 
@@ -633,12 +634,13 @@ killed.
 | Per-format streaming | `rag_service/tests/test_streaming_formats.py` | **58** | Batched output identical to eager output for every format; batch size never changes results |
 | Embeddings | `rag_service/tests/test_embeddings.py` | **22** | Provider selection, dimension guard, retries, credential-leak checks |
 | LLM fallback | `rag_service/tests/test_llm_fallback.py` | **177** | Mistral success, HTTP 429 / timeout / 5xx failover to Llama 3.1 on Hugging Face driven through `rag_engine`, both-fail behaviour, transport errors, prompt fidelity |
+| Daily chat quota | `backend/src/middleware/chatDailyLimit.test.js` | **43** | 0/1/10/11 progression, per-user isolation, next-day reset, refunds, quota figures in headers and the 429 body, one chat per failover turn, concurrent bursts |
 | Progress reporting | `rag_service/tests/test_progress.py` | **31** | Page/OCR/block counters, throttling, callback failures never break ingestion |
 | Large-document memory | `rag_service/tests/test_large_document.py` | **15** | Streaming vs eager peak memory, byte-identical output, tuning knobs |
 | Scalability | `rag_service/tests/test_scalability.py` | **16** | 280 / 560 / 1,000 pages; memory must not track page count |
 | Query routing | `backend/src/services/queryRouter.test.js` | **38** | Route selection, fresh-data override, availability degradation, web toggle |
 | Frontend | `frontend/src/lib/uploadProgress.test.js`, `frontend/src/components/ProcessingProgress.test.jsx` | **36** | Progress derivation (28) + rendered markup and ARIA (8) |
-| **Total** | | **447** | |
+| **Total** | | **490** | |
 
 ### Container verification
 
@@ -658,7 +660,7 @@ Four validation assertions in the full-format HTTP E2E script accept `429 RATE_L
 pass. Once that script exhausts its hourly upload budget those four cases self-certify without
 testing anything. They were re-run separately on a cleared budget and do genuinely return
 `DANGEROUS_FILE`, `EMPTY_FILE`, `PARSE_FAILED` and `NO_TEXT_EXTRACTED` — but **the assertions
-themselves remain weak and should be tightened.** They are excluded from the 447 count above.
+themselves remain weak and should be tightened.** They are excluded from the 490 count above.
 
 ---
 
@@ -915,6 +917,9 @@ RATE_LIMIT_LOGIN=
 RATE_LIMIT_SIGNUP=
 RATE_LIMIT_CHAT=
 RATE_LIMIT_UPLOAD=
+CHAT_DAILY_LIMIT=
+CHAT_DAILY_LIMIT_TIMEZONE=
+CHAT_DAILY_LIMIT_FAIL_OPEN=
 PYTHON_BIN=
 RAG_SERVICE_URL=
 RAG_SERVICE_HOST=
@@ -990,6 +995,17 @@ data when someone forgets a filter.
 
 **Redis that fails open** — rate limiting and caching are valuable, but not worth an outage.
 When Redis is unavailable the app serves and flags the bypass rather than rejecting traffic.
+The daily chat quota follows the same default (`CHAT_DAILY_LIMIT_FAIL_OPEN`), which can be
+flipped for a deployment where the allowance matters more than availability.
+
+**Reserve-then-refund for the daily chat quota** — the counter is incremented *before* the
+turn runs, because `INCR` is the atomic step that makes a simultaneous burst safe: the 11th
+concurrent request reads 11 back and is rejected however the requests interleave. Checking
+first and incrementing later would let eleven requests all read 9 and all proceed. The
+reservation is released again if the turn never starts processing, so a rejected request costs
+nothing while a request that ran and then failed still costs its one chat. Because the counter
+moves once per HTTP request, a Mistral call that fails over to Hugging Face is one chat, not
+two — the failover happens entirely inside that single turn.
 
 **Multi-user isolation by denormalisation** — `user_id` is duplicated onto `document_chunks`
 purely so it can participate in the vector query. Slight redundancy in exchange for an
@@ -1086,7 +1102,7 @@ React 19 · Express 5 · FastAPI · PostgreSQL/pgvector · Redis · LangChain ·
   and multi-tenant isolation enforced *inside* PostgreSQL/pgvector HNSW cosine search.
 
 - **Built** seven-format ingestion (PDF/DOC/DOCX/PPT/PPTX/TXT/MD) with per-page Tesseract OCR
-  fallback and headless LibreOffice conversion, validated by **447 automated tests** producing
+  fallback and headless LibreOffice conversion, validated by **490 automated tests** producing
   byte-identical output on Windows and inside a 469 MB Debian container.
 
 ---

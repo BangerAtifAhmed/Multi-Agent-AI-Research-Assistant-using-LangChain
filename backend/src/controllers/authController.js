@@ -56,8 +56,10 @@ export async function googleStart(req, res) {
  * find-or-create the user and hand the browser back to the frontend.
  */
 export async function googleCallback(req, res) {
+  // Always the site root: the frontend is a single page with no /login route,
+  // and a static host answers any other path with a 404 instead of the app.
   const failureUrl = (reason) =>
-    `${config.frontendUrl}/login?error=${encodeURIComponent(reason)}`;
+    `${config.frontendUrl}/?error=${encodeURIComponent(reason)}`;
 
   // The user declined consent.
   if (req.query.error) {
