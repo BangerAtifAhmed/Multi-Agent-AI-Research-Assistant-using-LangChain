@@ -24,6 +24,11 @@ caller. Once tokens are on the wire, restarting would duplicate text in the
 user's browser, so a mid-stream failure is raised as-is and handled by
 rag_engine's error mapping.
 
+Groq (openai/gpt-oss-120b) is a third provider. LLM_PROVIDER_ORDER sets the
+order they are tried in (default mistral -> groq -> huggingface); build_llm
+nests one FallbackChatModel per extra provider, so each still only sees a
+request every provider before it lost.
+
 Configuration lives in settings.py / backend/.env (LLM_FALLBACK_*). Setting
 LLM_FALLBACK_ENABLED=false - or simply leaving the Hugging Face token unset -
 returns the bare ChatMistralAI, exactly as before this module existed.
@@ -800,37 +805,79 @@ def build_fallback_llm() -> HuggingFaceChatModel | None:
     )
 
 
+def build_groq_llm():
+    """openai/gpt-oss-120b on Groq, or None when no GROQ_API_KEY is set."""
+    if not settings.GROQ_API_KEY:
+        _log("groq disabled: set GROQ_API_KEY to add it to the provider chain")
+        return None
+
+    from langchain_groq import ChatGroq
+
+    return ChatGroq(
+        model=settings.GROQ_MODEL,
+        api_key=settings.GROQ_API_KEY,
+        temperature=settings.LLM_TEMPERATURE,
+        max_tokens=settings.GROQ_MAX_TOKENS,
+        reasoning_effort=settings.GROQ_REASONING_EFFORT or None,
+        request_timeout=settings.LLM_FALLBACK_TIMEOUT,
+        max_retries=settings.LLM_FALLBACK_MAX_RETRIES,
+        streaming=True,
+    )
+
+
+def _build_provider(name: str) -> tuple[str, Any] | None:
+    """(label, model) for one entry of LLM_PROVIDER_ORDER, or None to skip it."""
+    if name == "mistral":
+        return f"mistral:{settings.MISTRAL_MODEL}", build_primary_llm()
+    if name == "groq":
+        model = build_groq_llm()
+        return (f"groq:{settings.GROQ_MODEL}", model) if model is not None else None
+    if name in ("huggingface", "hf"):
+        model = build_fallback_llm()
+        return (f"huggingface:{model.model}", model) if model is not None else None
+    _log(f"unknown provider '{name}' in LLM_PROVIDER_ORDER, skipping it")
+    return None
+
+
 def build_llm() -> BaseChatModel:
     """The chat model agents.py hands to every chain.
 
-    With the fallback off this returns the bare ChatMistralAI, so the service
-    behaves exactly as it did before this module existed.
+    Providers are tried in LLM_PROVIDER_ORDER. Each later provider is the
+    FallbackChatModel fallback of the chain before it, so a request only reaches
+    it once every earlier provider has failed. With a single provider configured
+    the bare model is returned.
     """
-    primary = build_primary_llm()
-    fallback = build_fallback_llm()
+    providers = [built for name in settings.LLM_PROVIDER_ORDER if (built := _build_provider(name))]
+    if not providers:
+        # Mistral is always buildable, so the service still starts.
+        providers = [(f"mistral:{settings.MISTRAL_MODEL}", build_primary_llm())]
 
-    if fallback is None:
-        _log(f"primary=mistral:{settings.MISTRAL_MODEL} fallback=none")
-        return primary
+    _log("provider order: " + " -> ".join(label for label, _ in providers))
 
-    _log(
-        f"primary=mistral:{settings.MISTRAL_MODEL} "
-        f"fallback=huggingface:{fallback.model} (used only when the primary fails)"
-    )
-    return FallbackChatModel(
-        primary=primary,
-        fallback=fallback,
-        primary_label=f"mistral:{settings.MISTRAL_MODEL}",
-        fallback_label=f"huggingface:{fallback.model}",
-    )
+    # Fold from the end: the last provider is the innermost fallback.
+    label, chain = providers[-1]
+    for primary_label, primary in reversed(providers[:-1]):
+        chain = FallbackChatModel(
+            primary=primary,
+            fallback=chain,
+            primary_label=primary_label,
+            fallback_label=label,
+        )
+        label = f"{primary_label} -> {label}"
+    return chain
 
 
 def describe() -> dict:
-    """Fallback configuration for /health. Never includes the token."""
+    """Fallback configuration for /health. Never includes a token."""
     return {
         "enabled": bool(settings.LLM_FALLBACK_ENABLED),
         "provider": "huggingface",
         "model": settings.LLM_FALLBACK_MODEL,
         "endpoint": settings.LLM_FALLBACK_API_URL,
         "configured": bool(settings.LLM_FALLBACK_API_TOKEN),
+        "order": settings.LLM_PROVIDER_ORDER,
+        "groq": {
+            "model": settings.GROQ_MODEL,
+            "configured": bool(settings.GROQ_API_KEY),
+        },
     }

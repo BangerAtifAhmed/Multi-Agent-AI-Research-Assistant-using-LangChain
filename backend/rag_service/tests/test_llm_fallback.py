@@ -671,6 +671,9 @@ else:
     # the chains under test are the ones the running service actually uses.
     settings.MISTRAL_API_KEY = settings.MISTRAL_API_KEY or "not-a-real-mistral-key"
     settings.LLM_FALLBACK_API_TOKEN = "hf_test_token_not_real"
+    # These tests cover the Mistral -> Hugging Face handover, so a Groq key in
+    # the developer's .env must not slip a real provider in between.
+    settings.LLM_PROVIDER_ORDER = ["mistral", "huggingface"]
     _buffer = io.StringIO()
     with redirect_stdout(_buffer):
         import agents  # noqa: E402

@@ -128,6 +128,26 @@ LLM_FALLBACK_TIMEOUT = _env_int("LLM_FALLBACK_TIMEOUT", 60)
 # Retries within the fallback itself, for a rate limit or a cold model.
 LLM_FALLBACK_MAX_RETRIES = _env_int("LLM_FALLBACK_MAX_RETRIES", 2)
 
+# --- Groq ---------------------------------------------------------------------
+# A third provider in the chain. Leaving GROQ_API_KEY blank simply drops it.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# gpt-oss is a reasoning model: low | medium | high.
+GROQ_REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "medium")
+# Reasoning tokens count against this budget too, so it is larger than
+# LLM_MAX_TOKENS to leave room for the answer itself.
+GROQ_MAX_TOKENS = _env_int("GROQ_MAX_TOKENS", 4096)
+
+# The order providers are tried in: the first answers, each later one only sees
+# a request every provider before it failed. Names: mistral, groq, huggingface.
+# Unconfigured providers (no key, or LLM_FALLBACK_ENABLED=false for
+# huggingface) are skipped.
+LLM_PROVIDER_ORDER = [
+    name.strip().lower()
+    for name in os.getenv("LLM_PROVIDER_ORDER", "mistral,groq,huggingface").split(",")
+    if name.strip()
+]
+
 # Longest one /generate/stream request may run before the stream is closed with
 # a timeout, however stuck the pipeline is. Sized to outlast a rate-limited
 # Mistral call retrying and then failing over to Hugging Face (Mistral's own
